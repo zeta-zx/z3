@@ -1,6 +1,7 @@
 from ephaptic.ext.fastapi import Router
-
 from ytmusicapi import YTMusic
+from typing import Optional
+from .models import FilterType, SearchResult
 
 router = Router()
 
@@ -12,6 +13,10 @@ async def music_root():
 
 
 @router.get('/search')
-async def search(query: str):
-    results = ytmusic.search(query)
+async def search(
+    query: str,
+    filter: Optional[FilterType] = None,
+    limit: int = 20,
+) -> list[SearchResult]:
+    results = ytmusic.search(query, filter=(filter and filter.value) or None, limit=limit)
     return results
