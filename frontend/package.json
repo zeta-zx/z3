@@ -20,5 +20,8 @@
 		"typescript": "^5.9.3",
 		"vite": "^7.3.1",
 		"vite-plugin-devtools-json": "^1.0.0"
+	},
+	"dependencies": {
+		"@ephaptic/client": "^0.1.6"
 	}
 }

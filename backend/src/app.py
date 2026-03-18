@@ -4,7 +4,7 @@ from fastapi import APIRouter, FastAPI
 
 import os
 
-import music
+from . import music
 
 app = FastAPI(root_path='/api')
 
@@ -21,7 +21,7 @@ modules = [
 for module in modules:
     router: Router = module.router
     router.bind(ephaptic)
-    api.include_router(router, prefix=f'/{module.__name__}')
+    api.include_router(router, prefix=f'/{module.__name__.split(".")[-1]}')
 
 app.include_router(api)
 

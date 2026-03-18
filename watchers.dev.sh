@@ -26,8 +26,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 (
-  cd backend
-  ephaptic generate src.app:ephaptic -o ../frontend/src/lib/schema.d.ts --watch
+  ephaptic generate backend.src.app:ephaptic -o ./frontend/src/lib/schema.d.ts --lang ts --watch
 ) &
 PIDS+=($!)
 
