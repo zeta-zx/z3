@@ -1,13 +1,16 @@
 from ephaptic import Ephaptic
 from ephaptic.ext.fastapi import Router
-
 from fastapi import APIRouter, FastAPI
+
+import os
 
 import music
 
 app = FastAPI(root_path='/api')
 
-ephaptic = Ephaptic.from_app(app)
+REDIS_URL = os.getenv('REDIS_URL')
+
+ephaptic = Ephaptic.from_app(app, path='/_ws', redis_url=REDIS_URL)
 
 api = APIRouter(prefix='/v1')
 
