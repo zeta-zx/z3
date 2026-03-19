@@ -13,6 +13,7 @@
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-auto": "^7.0.0",
+		"@sveltejs/adapter-node": "^5.5.4",
 		"@sveltejs/kit": "^2.50.2",
 		"@sveltejs/vite-plugin-svelte": "^6.2.4",
 		"svelte": "^5.51.0",
@@ -22,6 +23,7 @@
 		"vite-plugin-devtools-json": "^1.0.0"
 	},
 	"dependencies": {
-		"@ephaptic/client": "^0.1.6"
+		"@ephaptic/client": "^0.1.6",
+		"lucide-svelte": "^0.577.0"
 	}
 }

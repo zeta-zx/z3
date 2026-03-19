@@ -9,6 +9,13 @@ from typing import (
     List,
 )
 
+class AudioStream(BaseModel):
+    format_id: str
+    ext: Optional[str] = None
+    acodec: Optional[str] = None
+    abr: Optional[float] = None
+    url: str
+
 
 class FilterType(str, Enum):
     SONGS = "songs"
@@ -38,6 +45,7 @@ class ResultType(str, Enum):
     VIDEO = "video"
     PLAYLIST = "playlist"
     EPISODE = "episode"
+    PODCAST = "podcast"
 
 class BaseResult(BaseModel):
     category: Optional[str] = None
@@ -65,7 +73,7 @@ class SongResult(BaseResult):
     duration_seconds: Optional[int] = None
     year: Optional[str] = None
     views: Optional[str] = None
-    isExplicit: bool
+    isExplicit: Optional[bool] = None
     inLibrary: Optional[bool] = None
     pinnedToListenAgain: Optional[bool] = None
 
@@ -77,6 +85,7 @@ class VideoResult(BaseResult):
     artists: List[Artist]
     views: Optional[str] = None
     duration: Optional[str] = None
+    duration_seconds: Optional[int] = None
     year: Optional[str] = None
 
 class AlbumResult(BaseResult):
@@ -93,9 +102,10 @@ class AlbumResult(BaseResult):
 class PlaylistResult(BaseResult):
     resultType: Literal[ResultType.PLAYLIST]
     title: str
-    author: str
-    itemCount: Union[int, str] # could be .. "212" or .. "95K" we can't tell :/
-    browseId: str
+    author: Optional[Union[List[Artist], str]] = None
+    itemCount: Optional[Union[int, str]] = None # could be .. "212" or .. "95K" we can't tell :/
+    browseId: Optional[str] = None
+    playlistId: Optional[str] = None
 
 class EpisodeResult(BaseResult):
     resultType: Literal[ResultType.EPISODE]
@@ -106,6 +116,11 @@ class EpisodeResult(BaseResult):
     live: bool
     podcast: Podcast
 
+class PodcastResult(BaseResult):
+    resultType: Literal[ResultType.PODCAST]
+    title: str
+    browseId: str
+
 SearchResult = Annotated[
     Union[
         ArtistResult,
@@ -114,6 +129,7 @@ SearchResult = Annotated[
         AlbumResult,
         PlaylistResult,
         EpisodeResult,
+        PodcastResult,
     ],
     Field(discriminator="resultType")
 ]

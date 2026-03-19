@@ -1,11 +1,21 @@
 <script lang="ts">
-	import favicon from '$lib/assets/favicon.svg';
+	import "$lib/styles.css";
 
 	let { children } = $props();
 </script>
 
 <svelte:head>
-	<link rel="icon" href={favicon} />
+	<title>Zeta</title>
+	<link rel="icon" href="/zeta.png" />
+	<link href="https://cdn.jsdelivr.net/npm/@picocss/pico/css/pico.min.css" rel="stylesheet">
 </svelte:head>
 
-{@render children()}
+<main class="container">
+	{@render children()}
+</main>
+
+<footer>
+	<small>
+	<p>© 2025 uukelele-scratch, Gamma7113131</p>
+	</small>
+</footer>

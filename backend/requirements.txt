@@ -4,3 +4,5 @@ ephaptic
 pydantic
 httpx
 ytmusicapi
+syncedlyrics
+yt-dlp
