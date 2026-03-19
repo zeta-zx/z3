@@ -188,10 +188,8 @@
 </div>
 
 {#if currentTrack}
-    {#key currentTrack.videoId}
-        <MusicPlayer
-            track={currentTrack}
-            onClose={()=> currentTrack = null}
-        />
-    {/key}
+    <MusicPlayer
+        track={currentTrack}
+        onClose={()=> currentTrack = null}
+    />
 {/if}

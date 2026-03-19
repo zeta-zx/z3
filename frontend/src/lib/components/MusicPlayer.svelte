@@ -28,7 +28,14 @@
     let currentPos = $state("lyric-center");
     let nextPos = $state("lyric-down");
 
+    let audioElement: HTMLAudioElement;
+
     $inspect(streams);
+
+    $effect(() => {
+        if (streams.length > 0 && audioElement)
+            audioElement.load();
+    });
 
     $effect(() => {
         if (!track) return;
@@ -39,6 +46,13 @@
 
         currentTime = 0;
         duration = 0;
+
+        currentLyricIndex = -1;
+        lyricsTextCurrent = "♪";
+        lyricsTextNext = "";
+        transitionStyle = "none";
+        currentPos = "lyric-center";
+        nextPos = "lyric-down";
 
         isLoading = true;
 
@@ -162,25 +176,24 @@
 
 <div id="player" class="player-bar" transition:fly={{ y: 100, duration: 300 }}>
 
-    {#if streams.length > 0}
-        <audio
-            id="audio-player"
-            bind:paused
-            bind:currentTime
-            bind:duration
-            autoplay
-            onended={() => paused = true}
-            onplay={updatePositionState}
-            onseeked={updatePositionState}
-        >
-            {#each streams as stream}
-                <source
-                    src={stream.url}
-                    type={getMimeType(stream)}
-                />
-            {/each}
-        </audio>
-    {/if}
+    <audio
+        id="audio-player"
+        bind:this={audioElement}
+        bind:paused
+        bind:currentTime
+        bind:duration
+        autoplay
+        onended={() => paused = true}
+        onplay={updatePositionState}
+        onseeked={updatePositionState}
+    >
+        {#each streams as stream}
+            <source
+                src={stream.url}
+                type={getMimeType(stream)}
+            />
+        {/each}
+    </audio>
 
     <img
         alt="Song Cover"
