@@ -17,8 +17,6 @@
     type SearchResult = Awaited<ReturnType<NonNullable<typeof client>['music_search']>>[number]; // spaghetti code but it works
     let results = $state<SearchResult[]>([]);
 
-    $inspect(results);
-
     const filterTypes = [
         "songs",
         "videos",
@@ -64,11 +62,8 @@
     }
 
     async function handleClick(result: SearchResult) {
-        console.log(result);
-
-        if (result.resultType === 'song' || result.resultType === 'video') {
+        if (result.resultType === 'song' || result.resultType === 'video')
             playerState.currentTrack = result;
-        }
     }
 </script>
 

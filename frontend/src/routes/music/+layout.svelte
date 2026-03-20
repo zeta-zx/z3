@@ -5,9 +5,16 @@
     import MiniMusicPlayer from "$lib/components/MiniMusicPlayer.svelte";
     import { playerState } from "$lib/state/player.svelte";
     import { page } from "$app/state";
-    import { parseLrc } from "$lib/utils";
+    import { parseLrc, getMimeType } from "$lib/utils";
 
     let { children } = $props();
+
+    let audioElement = $state<HTMLAudioElement>();
+
+    $effect(() => {
+        if (playerState.streams.length > 0 && audioElement)
+            audioElement.load();
+    });
 
     $effect(() => {
         const track = playerState.currentTrack;
@@ -45,7 +52,59 @@
 
     });
 
+    $effect(() => {
+        const track = playerState.currentTrack;
+        if (!track || !('mediaSession' in navigator)) return;
+
+        navigator.mediaSession.metadata = new MediaMetadata({
+            title: track.title,
+            artist: track.artists.map(a => a.name).join(', '),
+            album: 'album' in track && track.album? track.album.name : 'Zeta Music',
+            artwork: track.thumbnails.map(t => ({
+                src: t.url,
+                sizes: `${t.width}x${t.height}`,
+                type: 'image/jpeg',
+            })),
+        });
+    });
+
+    $effect(() => {
+        const track = playerState.currentTrack;
+        if (!track || !('mediaSession' in navigator)) return;
+
+        navigator.mediaSession.playbackState = playerState.paused ? 'paused' : 'playing';
+    });
+
+    $effect(() => {
+        const track = playerState.currentTrack;
+        if (!track || !('mediaSession' in navigator)) return;
+
+        navigator.mediaSession.setActionHandler('play', () => playerState.paused = false);
+        navigator.mediaSession.setActionHandler('pause', () => playerState.paused = true);
+
+        navigator.mediaSession.setActionHandler('seekto', details => {
+            if (details.seekTime !== undefined && details.seekTime !== null)
+                playerState.currentTime = details.seekTime;
+        });
+
+        // navigator.mediaSession.setActionHandler('previoustrack', () => playPrevious());
+        // navigator.mediaSession.setActionHandler('nexttrack', () => playNext());
+    });
+
+    function updatePositionState() {
+        const track = playerState.currentTrack;
+        if (!track || !('mediaSession' in navigator)) return;
+
+        navigator.mediaSession.setPositionState({
+            duration: playerState.duration || 0,
+            playbackRate: 1,
+            position: playerState.currentTime,
+        });
+    }
+
 </script>
+
+<br>
 
 <div class="layout-grid">
     <aside>
@@ -85,8 +144,6 @@
 
     <div class="content">
 		<main class="container">
-            <br />
-
             <h1 class="zeta"><span class="zcolor"><Icon name="audio-lines" /> Zeta</span> Music</h1>
 
             <p>What do you want to check out?</p>
@@ -98,4 +155,24 @@
 
 {#if playerState.currentTrack}
     <MusicPlayer />
+
+    <audio
+        id="audio-player"
+        bind:this={audioElement}
+        bind:paused={playerState.paused}
+        bind:currentTime={playerState.currentTime}
+        bind:duration={playerState.duration}
+        autoplay
+        onended={() => playerState.paused = true}
+        onplay={updatePositionState}
+        onseeked={updatePositionState}
+    >
+        {#each playerState.streams as stream}
+            <source
+                src={stream.url}
+                type={getMimeType(stream)}
+            />
+        {/each}
+    </audio>
+
 {/if}

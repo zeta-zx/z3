@@ -14,13 +14,6 @@
     let currentPos = $state("lyric-center");
     let nextPos = $state("lyric-down");
 
-    let audioElement: HTMLAudioElement;
-
-    $effect(() => {
-        if (playerState.streams.length > 0 && audioElement)
-            audioElement.load();
-    });
-
     $effect(() => {
         if (playerState.isLoading) {
             lyricsTextCurrent = 'Loading song...';
@@ -67,90 +60,10 @@
 
     });
 
-    $effect(() => {
-        const track = playerState.currentTrack;
-        if (!track || !('mediaSession' in navigator)) return;
-
-        navigator.mediaSession.metadata = new MediaMetadata({
-            title: track.title,
-            artist: track.artists.map(a => a.name).join(', '),
-            album: 'album' in track && track.album? track.album.name : 'Zeta Music',
-            artwork: track.thumbnails.map(t => ({
-                src: t.url,
-                sizes: `${t.width}x${t.height}`,
-                type: 'image/jpeg',
-            })),
-        });
-    });
-
-    $effect(() => {
-        const track = playerState.currentTrack;
-        if (!track || !('mediaSession' in navigator)) return;
-
-        navigator.mediaSession.playbackState = playerState.paused ? 'paused' : 'playing';
-    });
-
-    $effect(() => {
-        const track = playerState.currentTrack;
-        if (!track || !('mediaSession' in navigator)) return;
-
-        navigator.mediaSession.setActionHandler('play', () => playerState.paused = false);
-        navigator.mediaSession.setActionHandler('pause', () => playerState.paused = true);
-
-        navigator.mediaSession.setActionHandler('seekto', details => {
-            if (details.seekTime !== undefined && details.seekTime !== null)
-                playerState.currentTime = details.seekTime;
-        });
-
-        // navigator.mediaSession.setActionHandler('previoustrack', () => playPrevious());
-        // navigator.mediaSession.setActionHandler('nexttrack', () => playNext());
-    });
-
-    function updatePositionState() {
-        const track = playerState.currentTrack;
-        if (!track || !('mediaSession' in navigator)) return;
-
-        navigator.mediaSession.setPositionState({
-            duration: playerState.duration || 0,
-            playbackRate: 1,
-            position: playerState.currentTime,
-        });
-    }
-
-    /*
-        $effect(() => {
-            if (!playerState.paused) {
-                updatePositionState(); 
-                const interval = setInterval(updatePositionState, 1000);
-                
-                return () => clearInterval(interval);
-            }
-        });
-    */
-
 
 </script>
 
 <div id="player" class="player-bar" transition:fly={{ y: 100, duration: 300 }}>
-
-    <audio
-        id="audio-player"
-        bind:this={audioElement}
-        bind:paused={playerState.paused}
-        bind:currentTime={playerState.currentTime}
-        bind:duration={playerState.duration}
-        autoplay
-        onended={() => playerState.paused = true}
-        onplay={updatePositionState}
-        onseeked={updatePositionState}
-    >
-        {#each playerState.streams as stream}
-            <source
-                src={stream.url}
-                type={getMimeType(stream)}
-            />
-        {/each}
-    </audio>
 
     <img
         alt="Song Cover"
@@ -165,7 +78,7 @@
         </div>
 
         <div class="controls">
-            <button onclick={() => playerState.paused = !playerState.paused} class="primary">
+            <button onclick={() => playerState.paused = !playerState.paused} disabled={playerState.isLoading} class="primary">
                 <Icon name={playerState.isLoading ? 'loader-circle' : playerState.paused ? "play" : "pause"} />
             </button>
 
@@ -184,7 +97,7 @@
             </div>
         </div>
 
-        <button onclick={playerState.currentTrack = null} class="secondary">
+        <button onclick={() => playerState.currentTrack = null} class="secondary">
             <Icon name="x" />
         </button>
 
