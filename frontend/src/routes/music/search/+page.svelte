@@ -4,6 +4,7 @@
     import { toTitleCase } from "$lib/utils";
     import Icon from "$lib/components/Icon.svelte";
     import MusicPlayer from "$lib/components/MusicPlayer.svelte";
+    import { playerState } from "$lib/state/player.svelte";
     import { tick } from "svelte";
 
     let searchValue = $state("");
@@ -15,8 +16,6 @@
 
     type SearchResult = Awaited<ReturnType<NonNullable<typeof client>['music_search']>>[number]; // spaghetti code but it works
     let results = $state<SearchResult[]>([]);
-
-    let currentTrack = $state<SongResult | VideoResult | null>(null);
 
     $inspect(results);
 
@@ -68,24 +67,18 @@
         console.log(result);
 
         if (result.resultType === 'song' || result.resultType === 'video') {
-            currentTrack = result;
+            playerState.currentTrack = result;
         }
     }
 </script>
 
-<br />
-
-<h1 class="zeta"><span class="zcolor"><Icon name="audio-lines" /> Zeta</span> Music</h1>
-
-<p>What do you want to check out?</p>
-
 <form name="search_music" onsubmit={searchMusic}>
     <!-- svelte-ignore (a11y_no_redundant_roles) because we need it for PicoCSS -->
-    <fieldset role="group">
+    <fieldset role="search">
         <input
             name="query"
             id="query"
-            type="text"
+            type="search"
             placeholder="Search..."
             list="search-suggestions"
             autocomplete="off"
@@ -186,10 +179,3 @@
         </article>
     {/each}
 </div>
-
-{#if currentTrack}
-    <MusicPlayer
-        track={currentTrack}
-        onClose={()=> currentTrack = null}
-    />
-{/if}

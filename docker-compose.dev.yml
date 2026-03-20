@@ -2,6 +2,9 @@ services:
   backend:
     build: ./backend
     container_name: z3-backend
+    volumes:
+      - ./backend:/app
+    command: "fastapi dev src/app.py --host 0.0.0.0 --port 80"
     environment:
       REDIS_URL: redis://redis:6379
     expose:

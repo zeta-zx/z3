@@ -91,7 +91,7 @@ class VideoResult(BaseResult):
 class AlbumResult(BaseResult):
     resultType: Literal[ResultType.ALBUM]
     title: str
-    type: str
+    type: Optional[str] = None
     artists: List[Artist]
     playlistId: str
     browseId: str

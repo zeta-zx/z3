@@ -297,3 +297,54 @@ a /*> button*/ {
     align-items: center;
     justify-content: center;
 }
+
+.layout-grid {
+	display: flex;
+	gap: calc(var(--pico-spacing) * 2);
+	align-items: flex-start;
+}
+
+.layout-grid aside {
+	flex: 0 0 240px;
+	position: sticky;
+	top: var(--pico-spacing);
+}
+
+.layout-grid aside a {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+}
+
+.layout-grid aside a[aria-current=page] {
+    background: var(--pico-form-element-selected-background-color);
+}
+
+.layout-grid .content {
+	flex: 1;
+}
+
+.mini-player-bg {
+    border-radius: 12px;
+    background-size: cover;
+    background-position: center;
+    overflow: hidden;
+}
+
+.mini-player {
+    backdrop-filter: blur(12px) saturate(150%);
+    -webkit-backdrop-filter: blur(12px) saturate(150%);
+    background: rgba(0, 0, 0, 0.25);
+    color: white;
+    padding: var(--pico-spacing);
+}
+
+.mini-player h4 {
+    color: white;
+    margin-bottom: 0;
+}
+
+.mini-player small {
+    display: block;
+    opacity: 0.8;
+}

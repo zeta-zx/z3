@@ -44,8 +44,8 @@
 
 <br><br>
 
-<fieldset role="group">
-    <input disabled={isSearchDisabled} type="text" placeholder="Search... for anything!">
+<fieldset role="search">
+    <input disabled={isSearchDisabled} type="search" placeholder="Search... for anything!">
     <select disabled={isSearchDisabled} style="width:10rem;">
         {#each options as option}
             {#if option.enabled}
