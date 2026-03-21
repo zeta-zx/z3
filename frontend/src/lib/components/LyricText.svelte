@@ -27,7 +27,7 @@
 
         let newIdx = playerState.lyrics.findIndex(line => line.time > playerState.currentTime) - 1;
         if (newIdx < 0 && playerState.currentTime >= (playerState.lyrics.at(-1)?.time || 0))
-            newIdx = playerState.lyrics.length = 1;
+            newIdx = playerState.lyrics.length - 1;
 
         if (newIdx >= 0 && newIdx !== currentLyricIndex) {
             const nextLyricText = playerState.lyrics[newIdx]?.text || '♪';
@@ -57,12 +57,11 @@
 </script>
 
 <span
-    id="lyricsTextCurrent"
     class="lyric-line {currentPos}"
     style="transition: {transitionStyle}"
 >{lyricsTextCurrent}</span>
 
-<span id="lyricsTextNext"
+<span
     class="lyric-line {nextPos}"
     style="transition: {transitionStyle}"
 >{lyricsTextNext}</span>
