@@ -5,6 +5,7 @@ import { parseLrc, type LrcLine } from "$lib/utils";
 interface PlayerState {
     currentTrack: SongResult | VideoResult | null,
     paused: boolean,
+    maximised: boolean,
     currentTime: number,
     duration: number,
     isLoading: boolean,
@@ -16,6 +17,7 @@ export const playerState = $state<PlayerState>({
     currentTrack: null,
 
     paused: true,
+    maximised: false,
     currentTime: 0,
     duration: 0,
     isLoading: true,

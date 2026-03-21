@@ -341,7 +341,7 @@ a /*> button*/ {
 
 .mini-player h4 {
     color: white;
-    margin: 0 auto;
+    margin: 0;
 }
 
 .mini-player small {
@@ -365,14 +365,45 @@ a /*> button*/ {
   transition: width 0.3s ease !important;
 }
 
-.mini-player .pause-btn {
-    position: absolute;
-    top: .75rem;
-    right: .75rem;
+.bar {
+    position: relative;
+
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.4);
+
+    margin-top: calc(var(--pico-spacing) * 0.5);
+
+    width: 100%;
+    height: 50px;
+
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    /* gap: calc(var(--pico-spacing) * 1.5); */
+}
+
+.btngroup {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: calc(var(--pico-spacing) * 0.2);
+    
+    margin: auto;
+}
+
+.controls button {
 
     padding: 5px;
 
     display: flex;
     align-items: center;
     justify-content: center;
+}
+
+.lyrics {
+    color: white;
+    text-align: center;
+    font-size: small;
+    font-size: clamp(1px, 4vw, 15px);
 }

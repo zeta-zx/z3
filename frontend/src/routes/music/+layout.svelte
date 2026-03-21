@@ -32,6 +32,7 @@
         playerState.currentTime = 0;
         playerState.duration = 0;
         playerState.isLoading = true;
+        playerState.maximised = true;
 
         client!.music_lyrics(`${track.title} - ${track.artists.map(a => a.name).join(', ')}`)
             .then(data => playerState.lyrics = parseLrc(data || ""))
@@ -154,7 +155,9 @@
 </div>
 
 {#if playerState.currentTrack}
-    <MusicPlayer />
+    {#if playerState.maximised}
+        <MusicPlayer />
+    {/if}
 
     <audio
         id="audio-player"
