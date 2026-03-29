@@ -1,7 +1,8 @@
 <script lang="ts">
+    import { browser } from "$app/environment";
     import Icon from "$lib/components/Icon.svelte";
     import { libraryState, type Playlist } from "$lib/state/library.svelte";
-    import { playerState } from "$lib/state/player.svelte";
+    import { playerState, playPlaylist } from "$lib/state/player.svelte";
     import { formatDate, createPlaceholderUrl, getCSSVar, Font } from "$lib/utils";
     import { fade, fly } from "svelte/transition";
 
@@ -9,7 +10,8 @@
 
     let currentlyOpenPlaylist = $state<Playlist | null>(null);
 
-    $inspect(currentlyOpenPlaylist);
+    // const totalDuration = (playlist: Playlist) => playlist.tracks.map(track => track.duration_seconds).reduce((sum, current) => (sum??0) + (current??0), 0);
+    // Unfortunately, YT Music API doesn't return duration for all tracks >:(
 </script>
 
 {#if !currentlyOpenPlaylist}
@@ -82,10 +84,16 @@
                 </small>
                 <br />
                 <div class="action-row">
-                    <button class="primary">
-                        <Icon name="play" />
-                    </button>
-                    <button class="secondary">
+                    {#if playerState.currentPlaylist?.id === playlist.id}
+                        <button class="primary" onclick={() => playerState.paused = !playerState.paused}>
+                            <Icon name={playerState.paused ? 'play' : playerState.isLoading ? 'loader-circle' : 'pause'} />
+                        </button>
+                    {:else}
+                        <button class="primary" onclick={() => playPlaylist(playlist)}>
+                            <Icon name='play' />
+                        </button>
+                    {/if}
+                    <button class="secondary" onclick={() => playPlaylist(playlist, 0, true)}>
                         <Icon name="shuffle" />
                     </button>
                 </div>
@@ -94,7 +102,7 @@
         <br />
         <div class="track-list">
             {#each playlist.tracks as track, i (track.videoId)}
-               <div class="track-row">
+               <div class="track-row" class:active={playerState.currentTrack?.videoId === track.videoId}>
                     <span class="track-num">#{i + 1}</span>
                     <img src={track.thumbnails?.at(-1)?.url || createPlaceholderUrl()} alt="Track Cover" referrerPolicy="no-referrer">
                     <div class="track-info">
@@ -102,7 +110,15 @@
                         <small>{track.artists.map(a => a.name).join(', ')}</small>
                     </div>
                     <div class="track-action-row">
-                        <button class="primary" onclick={() => playerState.currentTrack = track}><Icon name="play" /></button>
+                        {#if playerState.currentTrack?.videoId === track.videoId}
+                            <button class="primary" onclick={() => playerState.paused = !playerState.paused}>
+                                <Icon name={playerState.paused ? 'play' : playerState.isLoading ? 'loader-circle' : 'pause'} />
+                            </button>
+                        {:else}
+                            <button class="primary" onclick={() => playPlaylist(playlist, i)}>
+                                <Icon name='play' />
+                            </button>
+                        {/if}
                         <button class="secondary"><Icon name="heart" /></button>
                         <button class="secondary"><Icon name="ellipsis-vertical" /></button>
                     </div>

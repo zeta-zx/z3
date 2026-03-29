@@ -7,7 +7,6 @@ cd "$PROJECT_ROOT"
 mkdir -p schema
 
 set -a
-source .env
 set +a
 
 PIDS=()

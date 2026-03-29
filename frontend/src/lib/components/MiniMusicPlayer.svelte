@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { playerState } from "$lib/state/player.svelte";
+    import { playerState, isPreviousTrackAvailable, isNextTrackAvailable, previousTrack, nextTrack } from "$lib/state/player.svelte";
     import { libraryState } from "$lib/state/library.svelte";
     import Icon from "$lib/components/Icon.svelte";
     import LyricText from "./LyricText.svelte";
@@ -28,22 +28,22 @@
 {#if track}
     <div class="bar controls">
         <div class="btngroup">
-            <button class="secondary" disabled>
+            <button class="secondary" disabled={!isPreviousTrackAvailable()} onclick={previousTrack}>
                 <Icon name="skip-back" />
             </button>
             <button class='pause-btn' disabled={playerState.isLoading} onclick={() => { playerState.paused = !playerState.paused }}>
                 <Icon name={playerState.isLoading ? 'loader-circle' : playerState.paused ? 'play' : 'pause'} />
             </button>
-            <button class="secondary" disabled>
+            <button class="secondary" disabled={!isNextTrackAvailable()} onclick={nextTrack}>
                 <Icon name="skip-forward" />
             </button>
         </div>
 
         <div class="btngroup">
-            <button class="secondary" disabled>
+            <button class={playerState.loop ? 'primary' : 'secondary'} disabled={!playerState.currentPlaylist} onclick={() => playerState.loop = !playerState.loop}>
                 <Icon name="repeat" />
             </button>
-            <button class="secondary" disabled>
+            <button class={playerState.shuffle ? 'primary' : 'secondary'} disabled={!playerState.currentPlaylist} onclick={() => playerState.shuffle = !playerState.shuffle}>
                 <Icon name="shuffle" />
             </button>
         </div>
@@ -67,7 +67,11 @@
             </button>
         </div>
         <div class="txt">
+            {#if playerState.currentPlaylist}
+            {playerState.currentPlaylist.name}
+            {:else}
             No playlist playing.
+            {/if}
         </div>
 
         {#if isAddToPlaylistOpen}

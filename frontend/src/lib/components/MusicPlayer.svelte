@@ -12,7 +12,7 @@
     id="player"
     class="player-bar"
     in:fly={{ y: 100, duration: 300 }}
-    out:fly={{ y: 100, duration: 300, delay: 100 }}
+    out:fly={{ y: 100, duration: 300, delay: 50 }}
 >
 
     <img

@@ -4,7 +4,7 @@
     import { toTitleCase } from "$lib/utils";
     import Icon from "$lib/components/Icon.svelte";
     import MusicPlayer from "$lib/components/MusicPlayer.svelte";
-    import { playerState } from "$lib/state/player.svelte";
+    import { playerState, playTrack } from "$lib/state/player.svelte";
     import { tick } from "svelte";
 
     let searchValue = $state("");
@@ -62,8 +62,9 @@
     }
 
     async function handleClick(result: SearchResult) {
-        if (result.resultType === 'song' || result.resultType === 'video')
-            playerState.currentTrack = result;
+        if (result.resultType === 'song' || result.resultType === 'video') {
+            playTrack(result);
+        }
     }
 </script>
 

@@ -3,9 +3,11 @@
     import Icon from "$lib/components/Icon.svelte";
     import MusicPlayer from "$lib/components/MusicPlayer.svelte";
     import MiniMusicPlayer from "$lib/components/MiniMusicPlayer.svelte";
-    import { playerState } from "$lib/state/player.svelte";
+    import { previousTrack, nextTrack, playerState, cache, loadTrack, resetState, applyCache } from "$lib/state/player.svelte";
     import { page } from "$app/state";
     import { parseLrc, getMimeType } from "$lib/utils";
+    import { fade } from "svelte/transition";
+    import { preloadData } from "$app/navigation";
 
     let { children } = $props();
 
@@ -26,31 +28,22 @@
             return;
         }
 
-        playerState.streams = [];
-        playerState.lyrics = [];
-        playerState.paused = true;
-        playerState.currentTime = 0;
-        playerState.duration = 0;
-        playerState.isLoading = true;
-        playerState.maximised = true;
+        resetState();
 
-        client!.music_lyrics(`${track.title} - ${track.artists.map(a => a.name).join(', ')}`)
-            .then(data => playerState.lyrics = parseLrc(data || ""))
-            .catch(console.error);
+        const cached = cache.get(track.videoId);
+        if (cached && cached.streams.length > 0) applyCache(cached);
+        else {
+            loadTrack(track)
+                .then(() => applyCache(cache.get(track.videoId)!))
+                .catch(console.error)
+                .finally(() => playerState.isLoading = false);
+        }
+    });
 
-        client!.music_stream(track.videoId)
-            .then(data => {
-                playerState.streams = data;
-                playerState.isLoading = false;
-                playerState.paused = false;
-            })
-            .catch(err => {
-                console.error(err);
-            })
-            .finally(() => {
-                playerState.isLoading = false;
-            });
-
+    $effect(() => {
+        if (playerState._upcomingTrack) {
+            loadTrack(playerState._upcomingTrack); // preload in background so that its ready for playback
+        }
     });
 
     $effect(() => {
@@ -88,8 +81,8 @@
                 playerState.currentTime = details.seekTime;
         });
 
-        // navigator.mediaSession.setActionHandler('previoustrack', () => playPrevious());
-        // navigator.mediaSession.setActionHandler('nexttrack', () => playNext());
+        navigator.mediaSession.setActionHandler('previoustrack', previousTrack);
+        navigator.mediaSession.setActionHandler('nexttrack', nextTrack);
     });
 
     function updatePositionState() {
@@ -149,7 +142,14 @@
 
             <p>What do you want to check out?</p>
 
-            {@render children()}
+            {#key page.url.pathname}
+                <div
+                    class="page-content-wrapper"
+                    in:fade={{ duration: 200, delay: 200 }}
+                    out:fade={{ duration: 200 }}>
+                    {@render children()}
+                </div>
+            {/key}
         </main>
 	</div>
 </div>
@@ -173,7 +173,10 @@
         bind:currentTime={playerState.currentTime}
         bind:duration={playerState.duration}
         autoplay
-        onended={() => playerState.paused = true}
+        onended={() => {
+            playerState.paused = true;
+            nextTrack();
+        }}
         onplay={updatePositionState}
         onseeked={updatePositionState}
     >

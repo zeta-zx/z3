@@ -119,7 +119,7 @@ class EpisodeResult(BaseResult):
     title: str
     videoId: str
     videoType: str
-    date: str
+    date: Optional[str] = None
     live: Optional[bool] = None
     podcast: Optional[Podcast] = None
 
