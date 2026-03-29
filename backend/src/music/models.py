@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from enum import Enum
 from typing import (
     Optional,
@@ -8,6 +8,7 @@ from typing import (
 
     List,
 )
+from urllib.parse import urlsplit, urlunsplit
 
 class AudioStream(BaseModel):
     format_id: str
@@ -29,6 +30,12 @@ class Thumbnail(BaseModel):
     url: str
     width: int
     height: int
+
+    # @field_validator("url", mode="before")
+    # @classmethod
+    # def strip_query_params(cls, v: str) -> str:
+    #     parts = urlsplit(v)
+    #     return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
 
 class Artist(BaseModel):
     name: str
@@ -113,8 +120,8 @@ class EpisodeResult(BaseResult):
     videoId: str
     videoType: str
     date: str
-    live: bool
-    podcast: Podcast
+    live: Optional[bool] = None
+    podcast: Optional[Podcast] = None
 
 class PodcastResult(BaseResult):
     resultType: Literal[ResultType.PODCAST]

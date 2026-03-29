@@ -8,7 +8,12 @@
     import LyricText from "$lib/components/LyricText.svelte";
 </script>
 
-<div id="player" class="player-bar" transition:fly={{ y: 100, duration: 300 }}>
+<div
+    id="player"
+    class="player-bar"
+    in:fly={{ y: 100, duration: 300 }}
+    out:fly={{ y: 100, duration: 300, delay: 100 }}
+>
 
     <img
         alt="Song Cover"
@@ -42,14 +47,13 @@
             </div>
         </div>
 
-        <button onclick={() => playerState.maximised = false} class="secondary">
-            <Icon name="chevron-down" />
-        </button>
-
     </div>
 
 </div>
 
-<div class="lyrics-container" transition:fly={{ y: 100, duration: 300, delay: 50 }}>
+<div class="lyrics-container"
+    in:fly={{ y: 100, duration: 300, delay: 50 }}
+    out:fly={{ y: 100, duration: 300, delay: 0 }}
+>
     <LyricText />
 </div>

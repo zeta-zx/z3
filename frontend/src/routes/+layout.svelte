@@ -8,6 +8,7 @@
 	<title>Zeta</title>
 	<link rel="icon" href="/zeta.png" />
 	<link href="https://cdn.jsdelivr.net/npm/@picocss/pico/css/pico.min.css" rel="stylesheet">
+	<!-- <link rel="stylesheet" href="https://unpkg.com/papercss/dist/paper.min.css"> -->
 </svelte:head>
 
 <main class="container">
@@ -16,6 +17,6 @@
 
 <footer>
 	<small>
-	<p>© 2025 uukelele-scratch, Gamma7113131</p>
+	<p>© 2025 uukelele</p>
 	</small>
 </footer>

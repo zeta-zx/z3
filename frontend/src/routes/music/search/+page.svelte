@@ -122,16 +122,24 @@
                 {#if result.resultType === 'song'}
                     <h4 title={result.title}>{result.title}</h4>
                     <p>
-                        <Icon name="music" /> Song <br /> <Icon name="user" /> {result.artists.map(a => a.name).join(', ')} 
-                        {#if result.album} <br /> <Icon name="disc-album" /> {result.album.name}{/if}
-                        {#if result.views} <br /> <Icon name="eye" /> {result.views}{/if}
+                        <small><Icon name="music" /> Song</small>
+                        <small><Icon name="user" /> {result.artists.map(a => a.name).join(', ')}</small>
+                        {#if result.album}
+                            <small><Icon name="disc-album" /> {result.album.name}</small>
+                        {/if}
+                        {#if result.views}
+                            <small><Icon name="eye" /> {result.views}</small>
+                        {/if}
                     </p>
 
                 {:else if result.resultType === 'video'}
                     <h4 title={result.title}>{result.title}</h4>
                     <p>
-                        <Icon name="video" /> Video <br /> <Icon name="user" /> {result.artists.map(a => a.name).join(', ')} 
-                        {#if result.views} <br /> <Icon name="eye" /> {result.views}{/if}
+                        <small><Icon name="video" /> Video</small>
+                        <small><Icon name="user" /> {result.artists.map(a => a.name).join(', ')}</small>
+                        {#if result.views}
+                            <small><Icon name="eye" /> {result.views}</small>
+                        {/if}
                     </p>
 
                 {:else if result.resultType === 'artist'}
@@ -139,36 +147,51 @@
                         {result.artist || result.artists?.map(a => a.name).join(', ') || 'Unknown Artist'}
                     </h4>
                     <p>
-                        <Icon name="user" /> Artist 
-                        {#if result.subscribers} <br /> <Icon name="youtube" /> {result.subscribers}{/if}
+                        <small><Icon name="user" /> Artist</small>
+                        {#if result.subscribers}
+                            <small><Icon name="youtube" /> {result.subscribers}</small>
+                        {/if}
                     </p>
 
                 {:else if result.resultType === 'album'}
                     <h4 title={result.title}>{result.title}</h4>
                     <p>
-                        <Icon name="disc-album" /> {result.type} <br /> <Icon name="user" /> {result.artists.map(a => a.name).join(', ')} 
-                        {#if result.year} <br /> <Icon name="calendar" /> {result.year}{/if}
+                        <small><Icon name="disc-album" /> {result.type}</small>
+                        <small><Icon name="user" /> {result.artists.map(a => a.name).join(', ')}</small>
+                        {#if result.year}
+                            <small><Icon name="calendar" /> {result.year}</small>
+                        {/if}
                     </p>
 
                 {:else if result.resultType === 'playlist'}
                     <h4 title={result.title}>{result.title}</h4>
                     <p>
-                        <Icon name="list-video" /> Playlist 
+                        <small><Icon name="list-video" /> Playlist</small>
                         {#if typeof result.author === 'string'}
-                            <br /> <Icon name="user" /> {result.author}
+                            <small><Icon name="user" /> {result.author}</small>
                         {:else if Array.isArray(result.author)}
-                            <br /> <Icon name="user" /> {result.author.map(a => a.name).join(', ')}
+                            <small><Icon name="user" /> {result.author.map(a => a.name).join(', ')}</small>
                         {/if}
-                        {#if result.itemCount} <br /> <Icon name="library-big" /> {result.itemCount} items{/if}
+                        {#if result.itemCount}
+                            <small><Icon name="library-big" /> {result.itemCount} items</small>
+                        {/if}
                     </p>
 
                 {:else if result.resultType === 'episode'}
                     <h4 title={result.title}>{result.title}</h4>
-                    <p><Icon name="clapperboard" /> Episode <br /> <Icon name="podcast"/> {result.podcast.name} <br /> <Icon name="calendar" /> {result.date}</p>
+                    <p>
+                        <small><Icon name="clapperboard" /> Episode</small>
+                        {#if result.podcast}
+                            <small><Icon name="podcast"/> {result.podcast.name}</small>
+                        {/if}
+                        <small><Icon name="calendar" /> {result.date}</small>
+                    </p>
 
                 {:else if result.resultType === 'podcast'}
                     <h4 title={result.title}>{result.title}</h4>
-                    <p><Icon name="podcast"/> Podcast</p>
+                    <p>
+                        <small><Icon name="podcast"/> Podcast</small>
+                    </p>
                 {/if}
             </div>
         </article>

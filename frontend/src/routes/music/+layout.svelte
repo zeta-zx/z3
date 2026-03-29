@@ -159,6 +159,13 @@
         <MusicPlayer />
     {/if}
 
+    <button
+        class='panel-control secondary'
+        onclick = { () => playerState.maximised = !playerState.maximised }
+    >
+        <Icon name="panel-bottom-{ playerState.maximised ? 'close' : 'open' }" />
+    </button>
+
     <audio
         id="audio-player"
         bind:this={audioElement}

@@ -21,7 +21,7 @@ async def music_search(
     limit: int = 20,
 ) -> list[SearchResult]:
     results = ytmusic.search(query, filter=(filter and filter.value) or None, limit=limit)
-    return results
+    return [res for res in results]
 
 @router.get('/search/suggestions')
 async def music_search_suggestions(
