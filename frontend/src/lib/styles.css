@@ -125,7 +125,20 @@ form[name=search_music] select {
     gap: 1.5rem;
 }
 
-.search-results article {
+.explore-results {
+    display: flex;
+    flex-direction: row;
+    gap: 1.5rem;
+    overflow-x: auto;
+    overflow-y: hidden;
+    white-space: nowrap;
+}
+
+.results article {
+    flex: 0 0 14rem;
+    min-width: 0;
+    box-sizing: border-box;
+
     width: 14rem;
     margin: 2rem auto;
     padding: 1rem;
@@ -137,7 +150,7 @@ form[name=search_music] select {
     transition: all 0.3s ease;
 }
 
-.search-results article:hover {
+.results article:hover {
     /* border: 2px solid var(--pico-primary-hover); */
     --pico-card-box-shadow: rgba(0, 0, 0, 0.08) 0px 3px 4px,
 rgba(0, 0, 0, 0.08) 0px 6px 10px,
@@ -148,13 +161,13 @@ rgba(0, 0, 0, 0.08) 0px 80px 160px;
     transform: translateY(-2px);
 }
 
-.search-results article .img-wrapper {
+.results article .img-wrapper {
     position: relative;
     display: block;
     margin-bottom: 1rem;
 }
 
-.search-results article .img-wrapper img {
+.results article .img-wrapper img {
     /* width: 100%; */
     margin: 0 auto;
     height: 220px;
@@ -164,7 +177,7 @@ rgba(0, 0, 0, 0.08) 0px 80px 160px;
     display: block;
 }
 
-.search-results .img-wrapper .duration {
+.results .img-wrapper .duration {
     position: absolute;
     bottom: 0.5rem;
     right: 1rem;
@@ -181,13 +194,18 @@ rgba(0, 0, 0, 0.08) 0px 80px 160px;
     gap: .25rem;
 }
 
-.search-results article .info-wrapper h4,
-.search-results article .info-wrapper h5,
-.search-results article .info-wrapper span {
+.results article .info-wrapper {
+    min-width: 0;
+}
+
+.results article .info-wrapper h4,
+.results article .info-wrapper h5,
+.results article .info-wrapper span {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     width: 100%;
+    display: block;
 }
 
 .player-bar {

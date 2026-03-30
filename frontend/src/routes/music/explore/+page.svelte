@@ -1,5 +1,6 @@
 <script lang="ts">
     import Icon from "$lib/components/Icon.svelte";
+    import Result from "$lib/components/Result.svelte";
     import { client } from "$lib/ephaptic";
     import type { ExploreResult, MoodOrGenre } from "$lib/schema";
     import { createPlaceholderUrl, Font, randomChoice } from "$lib/utils";
@@ -68,5 +69,56 @@
                 <img src={getMoodBg(mood)}>
             {/each}
         </div>
+        <br />
+    {/if}
+
+    {#if new_releases}
+        <h2>New Releases</h2>
+        <div class="results explore-results">
+            {#each new_releases as release}
+                <Result result={release} handleClick={() => {}} />
+            {/each}
+        </div>
+        <br />
+    {/if}
+
+    {#if new_videos}
+        <h2>New Videos</h2>
+        <div class="results explore-results">
+            {#each new_videos as video}
+                <Result result={video} handleClick={() => {}} />
+            {/each}
+        </div>
+        <br />
+    {/if}
+
+    {#if top_episodes}
+        <h2>Top Episodes</h2>
+        <div class="results explore-results">
+            {#each top_episodes as episode}
+                <Result result={episode} handleClick={() => {}} />
+            {/each}
+        </div>
+        <br />
+    {/if}
+
+    {#if top_songs}
+        <h2>Top Songs</h2>
+        <div class="results explore-results">
+            {#each top_songs.items as song}
+                <Result result={song} handleClick={() => {}} />
+            {/each}
+        </div>
+        <br />
+    {/if}
+
+    {#if trending}
+        <h2>Trending</h2>
+        <div class="results explore-results">
+            {#each trending.items as item}
+                <Result result={item} handleClick={() => {}} />
+            {/each}
+        </div>
+        <br />
     {/if}
 {/if}
