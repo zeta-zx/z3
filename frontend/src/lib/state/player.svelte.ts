@@ -26,7 +26,8 @@ interface PlayerState {
     loop: boolean,
     shuffle: boolean,
 
-    _alreadyPlayed: string[];
+    _history: string[];
+    _historyIndex: number;
 }
 
 export const playerState = $state<PlayerState>({
@@ -46,7 +47,8 @@ export const playerState = $state<PlayerState>({
     loop: true,
     shuffle: false,
 
-    _alreadyPlayed: [],
+    _history: [],
+    _historyIndex: -1,
 });
 
 export function calculateUpcomingTrack() {
@@ -55,8 +57,14 @@ export function calculateUpcomingTrack() {
         return;
     }
 
+    if (playerState._historyIndex < playerState._history.length - 1) {
+        const nextId = playerState._history[playerState._historyIndex + 1];
+        playerState._upcomingTrack = playerState.currentPlaylist.tracks.find(t => t.videoId === nextId) || null;
+        if (playerState._upcomingTrack) return;
+    }
+
     if (playerState.shuffle) {
-        let candidates = playerState.currentPlaylist.tracks.filter(t => !playerState._alreadyPlayed.includes(t.videoId));
+        let candidates = playerState.currentPlaylist.tracks.filter(t => !playerState._history.includes(t.videoId));
         
         if (candidates.length === 0 && playerState.loop) {
             candidates = playerState.currentPlaylist.tracks.filter(t => t.videoId !== playerState.currentTrack?.videoId);
@@ -75,7 +83,8 @@ export function calculateUpcomingTrack() {
 export function playTrack(track: PlayableTrack) {
     playerState.currentPlaylist = null;
     playerState.currentTrack = track;
-    playerState._alreadyPlayed = [track.videoId];
+    playerState._history = [track.videoId];
+    playerState._historyIndex = 0;
     playerState._upcomingTrack = null; 
 }
 
@@ -83,7 +92,6 @@ export function playPlaylist(playlist: Playlist, startIndex: number = 0, shuffle
     if (!playlist || playlist.tracks.length === 0) return;
 
     playerState.currentPlaylist = playlist;
-    playerState._alreadyPlayed = [];
 
     if (shuffleFlag !== undefined) playerState.shuffle = shuffleFlag;
     // otherwise don't modify it
@@ -96,8 +104,8 @@ export function playPlaylist(playlist: Playlist, startIndex: number = 0, shuffle
     }
 
     playerState.currentTrack = start;
-    
-    playerState._alreadyPlayed.push(playerState.currentTrack.videoId);
+    playerState._history = [playerState.currentTrack.videoId];
+    playerState._historyIndex = 0;
 
     calculateUpcomingTrack();
 }
@@ -106,32 +114,35 @@ export function isNextTrackAvailable() { return playerState._upcomingTrack !== n
 
 export function isPreviousTrackAvailable() {
     if (!playerState.currentPlaylist) return false;
-    return playerState._alreadyPlayed.length > 1 || (playerState.loop && !playerState.shuffle);
+    return playerState._historyIndex > 0 || (playerState.loop && !playerState.shuffle);
 }
 
 export function nextTrack() {
     if (!playerState._upcomingTrack) return;
     
-    if (playerState.shuffle && playerState._alreadyPlayed.includes(playerState._upcomingTrack.videoId)) {
-        playerState._alreadyPlayed =[];
+    if (playerState._historyIndex < playerState._history.length - 1) {
+        playerState._historyIndex++;
+        const nextId = playerState._history[playerState._historyIndex];
+        playerState.currentTrack = playerState.currentPlaylist?.tracks.find(t => t.videoId === nextId) || null;
+    } else {
+        playerState.currentTrack = playerState._upcomingTrack;
+        playerState._history.push(playerState.currentTrack.videoId);
+        playerState._historyIndex++;
     }
 
-    playerState.currentTrack = playerState._upcomingTrack;
-    playerState._alreadyPlayed.push(playerState.currentTrack.videoId);
     calculateUpcomingTrack();
 }
 
 export function previousTrack() {
     if (!playerState.currentPlaylist) return; // keep these manul checks here isntead of util functions above to satisfy typescript
-    if (playerState._alreadyPlayed.length > 1) {
-        playerState._alreadyPlayed.pop(); // currently playin
-        const previous = playerState._alreadyPlayed.pop();
-
-        const previousTrack = playerState.currentPlaylist.tracks.find(t => t.videoId === previous);
+    
+    if (playerState._historyIndex > 0) {
+        playerState._historyIndex--;
+        const previousId = playerState._history[playerState._historyIndex];
+        const previousTrack = playerState.currentPlaylist.tracks.find(t => t.videoId === previousId);
 
         if (previousTrack) {
             playerState.currentTrack = previousTrack;
-            playerState._alreadyPlayed.push(previousTrack.videoId); // becuz we just popped it off to find it
             calculateUpcomingTrack();
             return;
         }
@@ -144,7 +155,8 @@ export function previousTrack() {
         
         if (index !== -1) {
             playerState.currentTrack = playerState.currentPlaylist.tracks[index];
-            playerState._alreadyPlayed.push(playerState.currentTrack.videoId);
+            playerState._history.unshift(playerState.currentTrack.videoId);
+            playerState._historyIndex = 0;
             calculateUpcomingTrack();
         }
     }
