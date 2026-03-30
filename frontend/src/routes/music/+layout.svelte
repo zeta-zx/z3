@@ -28,15 +28,23 @@
             return;
         }
 
+        const loadingId = track.videoId;
+
         resetState();
 
         const cached = cache.get(track.videoId);
         if (cached && cached.streams.length > 0) applyCache(cached);
         else {
             loadTrack(track)
-                .then(() => applyCache(cache.get(track.videoId)!))
+                .then(() => {
+                    if (playerState.currentTrack?.videoId === loadingId)
+                        applyCache(cache.get(loadingId)!);
+                })
                 .catch(console.error)
-                .finally(() => playerState.isLoading = false);
+                .finally(() => {
+                    if (playerState.currentTrack?.videoId === loadingId)
+                        applyCache(cache.get(loadingId)!);
+                });
         }
     });
 

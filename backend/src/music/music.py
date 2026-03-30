@@ -3,7 +3,7 @@ from ytmusicapi import YTMusic
 from typing import Optional
 import syncedlyrics
 from yt_dlp import YoutubeDL
-from .models import FilterType, SearchResult, AudioStream
+from .models import FilterType, SearchResult, AudioStream, ExploreResult
 
 router = Router()
 
@@ -61,3 +61,33 @@ async def music_stream(
     formats.sort(key=lambda x: x.get("abr") or 0, reverse=True)
 
     return formats
+
+@router.get('/exlore')
+async def music_explore() -> ExploreResult:
+    results = ytmusic.get_explore()
+
+    for item in results.get('new_releases', []):
+        item['resultType'] = 'album'
+
+    if results.get('top_songs') and 'items' in results['top_songs']:
+        for item in results['top_songs']['items']:
+            item['resultType'] = 'song'
+
+    for item in results.get('top_episodes', []):
+        item['resultType'] = 'episode'
+
+    if results.get('trending') and 'items' in results['trending']:
+        for item in results['trending']['items']:
+            if 'podcast' in item:
+                item['resultType'] = 'episode'
+            elif item.get('videoType') in ('MUSIC_VIDEO_TYPE_OMV', 'MUSIC_VIDEO_TYPE_UGC'):
+                item['resultType'] = 'video'
+            else:
+                item['resultType'] = 'song'
+
+    for item in results.get('new_videos', []):
+        item['resultType'] = 'video'
+        if 'videoType' not in item:
+            item['videoType'] = 'MUSIC_VIDEO_TYPE_OMV'
+
+    return results

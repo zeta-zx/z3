@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator
 from enum import Enum
 from typing import (
     Optional,
@@ -83,25 +83,29 @@ class SongResult(BaseResult):
     isExplicit: Optional[bool] = None
     inLibrary: Optional[bool] = None
     pinnedToListenAgain: Optional[bool] = None
+    playlistId: Optional[str] = None
+    rank: Optional[str] = None
+    trend: Optional[str] = None
 
 class VideoResult(BaseResult):
     resultType: Literal[ResultType.VIDEO]
     title: str
     videoId: str
-    videoType: str
+    videoType: Optional[str] = None
     artists: List[Artist]
     views: Optional[str] = None
     duration: Optional[str] = None
     duration_seconds: Optional[int] = None
     year: Optional[str] = None
+    playlistId: Optional[str] = None
 
 class AlbumResult(BaseResult):
     resultType: Literal[ResultType.ALBUM]
     title: str
     type: Optional[str] = None
     artists: List[Artist]
-    playlistId: str
-    browseId: str
+    playlistId: str = Field(validation_alias=AliasChoices('playlistId', 'audioPlaylistId'))
+    browseId: Optional[str] = None
     year: Optional[str] = None
     isExplicit: Optional[bool] = None
     duration: Optional[str] = None
@@ -140,3 +144,23 @@ SearchResult = Annotated[
     ],
     Field(discriminator="resultType")
 ]
+
+class TopSongsResult(BaseModel):
+    playlist: str
+    items: list[SearchResult]
+
+class TrendingResult(BaseModel):
+    playlist: str
+    items: list[SearchResult]
+
+class MoodOrGenre(BaseModel):
+    title: str
+    params: str
+
+class ExploreResult(BaseModel):
+    new_releases: Optional[list[SearchResult]] = None
+    top_songs: Optional[TopSongsResult] = None
+    moods_and_genres: Optional[list[MoodOrGenre]] = None
+    top_episodes: Optional[list[EpisodeResult]] = None
+    trending: Optional[TrendingResult] = None
+    new_videos: Optional[list[SearchResult]] = None

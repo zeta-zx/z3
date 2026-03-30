@@ -79,20 +79,25 @@ export function playTrack(track: PlayableTrack) {
     playerState._upcomingTrack = null; 
 }
 
-export function playPlaylist(playlist: Playlist, startIndex: number = 0, shuffle?: boolean) {
+export function playPlaylist(playlist: Playlist, startIndex: number = 0, shuffleFlag?: boolean) {
     if (!playlist || playlist.tracks.length === 0) return;
 
-    if (startIndex < 0 || startIndex >= playlist.tracks.length) startIndex = 0;
-
     playerState.currentPlaylist = playlist;
-    playerState._alreadyPlayed =[]; 
+    playerState._alreadyPlayed = [];
 
-    playerState.currentTrack = playlist.tracks[startIndex];
+    if (shuffleFlag !== undefined) playerState.shuffle = shuffleFlag;
+    // otherwise don't modify it
+
+    let start;
+    if (playerState.shuffle) start = shuffle([...playlist.tracks])[0];
+    else {
+        if (startIndex < 0 || startIndex >= playlist.tracks.length) startIndex = 0;
+        start = playlist.tracks[startIndex]
+    }
+
+    playerState.currentTrack = start;
     
     playerState._alreadyPlayed.push(playerState.currentTrack.videoId);
-
-    if (shuffle !== undefined) playerState.shuffle = shuffle;
-    // otherwise don't modify it
 
     calculateUpcomingTrack();
 }
@@ -172,10 +177,12 @@ export function resetState() {
     playerState.currentTime = 0;
     playerState.duration = 0;
     playerState.isLoading = true;
-    playerState.maximised = true;
 }
 
-export function applyCache(cached: CacheRecord) {
+export function applyCache(cached?: CacheRecord) {
+    if (!cached) cached = cache.get(playerState.currentTrack?.videoId || '');
+    if (!cached || !cached.streams || cached.streams.length === 0) return;
+    
     playerState.lyrics = cached.lyrics;
     playerState.streams = cached.streams;
     playerState.isLoading = false;

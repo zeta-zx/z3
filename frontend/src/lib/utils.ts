@@ -8,6 +8,10 @@ export function toTitleCase(str: string): string {
         .join(' ');
 }
 
+export function randomChoice<T>(arr: T[]): T {
+    return arr[Math.floor(Math.random() * arr.length)];
+}
+
 export type LrcLine = {
     time: number;
     text: string;
@@ -154,4 +158,11 @@ export function shuffle<T>(arr: T[]): T[] {
         [result[i], result[j]] = [result[j], result[i]];
     }
     return result;
+}
+
+export function toTitleCaseFromSnake(str: string): string {
+    return str
+        .split("_")
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(" ");
 }
