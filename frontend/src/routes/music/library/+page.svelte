@@ -12,9 +12,43 @@
 
     // const totalDuration = (playlist: Playlist) => playlist.tracks.map(track => track.duration_seconds).reduce((sum, current) => (sum??0) + (current??0), 0);
     // Unfortunately, YT Music API doesn't return duration for all tracks >:(
+
+    function handleImport() {
+        const i = document.createElement('input');
+        i.type = 'file';
+        i.click();
+        i.addEventListener('input', async e => {
+            const data = i.files?.[0];
+            if (!data) return; // upload cancelled
+            const text = await data.text();
+            libraryState.import(text);
+        });
+    }
+
+    function handleExport() {
+        const data = libraryState.export();
+        
+        const blob = new Blob([data], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'playlists.zeta';
+        a.click();
+
+        URL.revokeObjectURL(url);
+    }
 </script>
 
 {#if !currentlyOpenPlaylist}
+    <button class="secondary" onclick={handleImport}>
+        <Icon name='download' />
+        Import Playlists
+    </button>
+    <button class="secondary" onclick={handleExport}>
+        <Icon name='upload' />
+        Export Playlists
+    </button>
     <div class="results playlists">
         {#each playlists as playlist (playlist.id)}
             <!-- svelte-ignore (a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions) -->

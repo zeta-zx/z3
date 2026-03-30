@@ -76,6 +76,7 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 100vh; /* ensures body fills viewport */
+  overflow-x: hidden;
 }
 
 main {

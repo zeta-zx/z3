@@ -35,6 +35,19 @@ class LibraryStore {
         }
     }
 
+    export(): string {
+        return JSON.stringify(this.playlists);
+    }
+
+    import(data: string) {
+        try {
+            this.playlists = JSON.parse(data);
+            this.save();
+        } catch (err) {
+            return;
+        }
+    }
+
     save() {
         if (!browser) return;
         localStorage.setItem(STORAGE_KEY, JSON.stringify(this.playlists));
