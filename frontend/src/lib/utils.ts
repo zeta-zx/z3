@@ -1,3 +1,4 @@
+import { browser } from "$app/environment";
 import type { AudioStream } from "$lib/schema";
 
 export function toTitleCase(str: string): string {
@@ -91,6 +92,7 @@ export function formatDate(dateData: any): string {
 }
 
 export function getCSSVar(variable: string): string {
+    if (!browser) return '';
     return getComputedStyle(document.documentElement)
                 .getPropertyValue(variable)
                 .trim();
@@ -165,4 +167,19 @@ export function toTitleCaseFromSnake(str: string): string {
         .split("_")
         .map(word => word.charAt(0).toUpperCase() + word.slice(1))
         .join(" ");
+}
+
+export function debounce<T extends (...args: any[]) => any>(
+  fn: T,
+  delay: number
+): (...args: Parameters<T>) => void {
+    let timer: ReturnType<typeof setTimeout>;
+
+    return function (...args: Parameters<T>) {
+        clearTimeout(timer);
+
+        timer = setTimeout(() => {
+            fn(...args);
+        }, delay);
+    };
 }

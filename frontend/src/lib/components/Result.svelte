@@ -1,7 +1,8 @@
 <script lang="ts">
     import { client } from "$lib/ephaptic";
     import Icon from "./Icon.svelte";
-
+    import { libraryState, isPlayableTrack } from "$lib/state/library.svelte";
+    import { fade, fly } from "svelte/transition";
     
     export type ResultType = Awaited<ReturnType<NonNullable<typeof client>['music_search']>>[number]; // spaghetti code but it works
 
@@ -11,16 +12,30 @@
     }
 
     const { result, handleClick }: Props = $props();
+
+    const isFavourited = $derived(isPlayableTrack(result) && libraryState.isInPlaylist('favourites', result.videoId));
+
+    let isAddToPlaylistOpen = $state(false);
+    let isHovered = $state(false);
 </script>
 
 <!-- svelte-ignore (a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions) -->
-<article onclick={() => handleClick(result)}>
+<article
+    onclick={() => handleClick(result)}
+    onmouseenter={() => (isHovered = true)}
+    onmouseleave={() => (isHovered = false)}
+  >
     <div class="img-wrapper">
         <img src={result.thumbnails.at(-1)?.url || "https://placehold.co/64"} alt={JSON.stringify(result)} referrerPolicy="no-referrer" /> <!-- https://stackoverflow.com/a/76662026 -->
         {#if result.resultType === 'song' || result.resultType === 'video' || result.resultType === 'album'}
             {#if result.duration}
                 <span title={result.duration} class="duration">{result.duration}</span>
             {/if}
+        {/if}
+        {#if isFavourited}
+            <span class="isFavourited" title="In Favourites">
+                <Icon name="heart" />
+            </span>
         {/if}
     </div>
     
@@ -66,7 +81,7 @@
         {:else if result.resultType === 'album'}
             <h4 title={result.title}>{result.title}</h4>
             <p>
-                <small><Icon name="disc-album" /> {result.type}</small>
+                <small><Icon name="disc-album" /> {result.type ?? result.title}</small>
                 <small><Icon name="user" /> {result.artists.map(a => a.name).join(', ')}</small>
                 {#if result.year}
                     <small><Icon name="calendar" /> {result.year}</small>
@@ -102,6 +117,54 @@
             <p>
                 <small><Icon name="podcast"/> Podcast</small>
             </p>
+        {/if}
+
+        {#if isPlayableTrack(result)}
+            <div class="btngroup" class:transparent={!isHovered} transition:fade={{ duration: 50 }}>
+                <button
+                    class = { isFavourited ? 'primary' : 'secondary' }
+                    onclick = { e => { e.stopPropagation(); libraryState.toggleFromPlaylist('favourites', result) } }
+                    title = { isFavourited ? "Remove from Favourites" : "Add to Favourites" }
+                >
+                    <Icon name="heart-plus" />
+                </button>
+                <button
+                    class = { isAddToPlaylistOpen ? 'primary' : 'secondary' }
+                    onclick = { e => { e.stopPropagation(); isAddToPlaylistOpen = !isAddToPlaylistOpen } }
+                    title = "Add to Playlist"
+                >
+                    <Icon name="list-plus" />
+                </button>
+            </div>
+
+            {#if isAddToPlaylistOpen}
+                <ul class='playlist-selector' dir="ltr" transition:fly={{ x: 0, y: -50, duration: 300 }}>
+                    {#each libraryState.playlists as playlist}
+                        <li class:active={libraryState.isInPlaylist(playlist.id, result.videoId)}>
+                            <a 
+                                href='#'
+                                onclick={e => {
+                                    e.stopPropagation();
+                                    e.preventDefault(); 
+                                    libraryState.toggleFromPlaylist(playlist.id, result);
+                                }}
+                            >
+                                {#if playlist.id === 'favourites'}
+                                    <Icon name="heart" />
+                                {:else}
+                                    <Icon name="list-plus" />
+                                {/if}
+                                {#if libraryState.isInPlaylist(playlist.id, result.videoId)}
+                                    Remove from
+                                {:else}
+                                    Add to
+                                {/if}
+                                {playlist.name}
+                            </a>
+                        </li>
+                    {/each}
+                </ul>
+            {/if}
         {/if}
     </div>
 </article>

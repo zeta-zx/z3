@@ -1,8 +1,0 @@
-fastapi[standard]
-uvicorn[standard]
-ephaptic
-pydantic
-httpx
-ytmusicapi
-syncedlyrics
-yt-dlp

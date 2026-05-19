@@ -1,7 +1,7 @@
 <script lang="ts">
     import { client } from "$lib/ephaptic";
     import type { FilterType, SongResult, VideoResult } from "$lib/schema";
-    import { toTitleCase } from "$lib/utils";
+    import { debounce, toTitleCase } from "$lib/utils";
     import Icon from "$lib/components/Icon.svelte";
     import MusicPlayer from "$lib/components/MusicPlayer.svelte";
     import { playerState, playTrack } from "$lib/state/player.svelte";
@@ -60,6 +60,7 @@
             return;
         }
     }
+    const debouncedUpdateSuggestions = debounce(updateSuggestions, 300);
 
     async function handleClick(result: ResultType) {
         if (result.resultType === 'song' || result.resultType === 'video') {
@@ -80,7 +81,7 @@
             autocomplete="off"
             bind:value={searchValue}
             aria-invalid={isSearchInvalid ? "true" : undefined}
-            oninput={updateSuggestions}
+            oninput={debouncedUpdateSuggestions}
         />
         <datalist id="search-suggestions">
             {#each suggestions as suggestion}

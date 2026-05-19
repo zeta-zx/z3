@@ -1,4 +1,4 @@
-FROM python:3.13
+FROM python:3.13-slim
 
 WORKDIR /app
 
@@ -8,8 +8,8 @@ RUN apt-get update && \
 
 RUN curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY pyproject.toml uv.lock ./
+RUN pip install .
 
 COPY src ./src
 

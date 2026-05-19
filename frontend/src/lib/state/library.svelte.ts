@@ -1,7 +1,12 @@
 import { browser } from "$app/environment";
+import type { ResultType } from "$lib/components/Result.svelte";
 import type { SongResult, VideoResult } from "$lib/schema";
 
 export type PlayableTrack = SongResult | VideoResult;
+
+export function isPlayableTrack(x: ResultType): x is PlayableTrack {
+  return 'videoId' in x;
+}
 
 export interface Playlist {
     id: string;

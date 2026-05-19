@@ -13,9 +13,31 @@
     // const totalDuration = (playlist: Playlist) => playlist.tracks.map(track => track.duration_seconds).reduce((sum, current) => (sum??0) + (current??0), 0);
     // Unfortunately, YT Music API doesn't return duration for all tracks >:(
 
+    function handleEditImage() {
+        if (!currentlyOpenPlaylist) return;
+        const i = document.createElement('input');
+        i.type = 'file';
+        i.accept = 'image/*';
+        i.click();
+        i.addEventListener('input', async e => {
+            const data = i.files?.[0];
+            if (!data) return;
+            const reader = new FileReader();
+            reader.readAsDataURL(data);
+
+            reader.onload = () => {
+                if (!currentlyOpenPlaylist) return;
+                if (!reader.result) return;
+                currentlyOpenPlaylist.thumbnail = reader.result.toString();
+                libraryState.save();
+            };
+        });
+    }
+
     function handleImport() {
         const i = document.createElement('input');
         i.type = 'file';
+        i.accept = '.zeta'
         i.click();
         i.addEventListener('input', async e => {
             const data = i.files?.[0];
@@ -49,7 +71,35 @@
         <Icon name='upload' />
         Export Playlists
     </button>
-    <div class="results playlists">
+    <div class="results search-results playlists">
+        <article class="playlist" onclick={() => {}}>
+            <div class="img-wrapper">
+                <img
+                    src={
+                        createPlaceholderUrl({
+                            width: 256,
+                            height: 256,
+                            backgroundColor: getCSSVar('--pico-primary')?.replace('#', ''),
+                            textColor: 'white',
+                            text: '+',
+                            font: Font.NotoSans,
+                        })
+                    }
+                    alt="Playlist Thumbnail"
+                />
+            </div>
+            <div class="info-wrapper">
+                <h4>Create Playlist</h4>
+                <!--<small title="Created {formatDate(playlist.createdAt)}">
+                    <Icon name="clock-plus" />
+                    {formatDate(playlist.createdAt)}
+                </small>
+                <small title="{playlist.tracks.length} tracks">
+                    <Icon name="square-library" />
+                    {playlist.tracks.length} tracks
+                </small>-->
+            </div>
+        </article>
         {#each playlists as playlist (playlist.id)}
             <!-- svelte-ignore (a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions) -->
             <article class="playlist" onclick={() => currentlyOpenPlaylist = playlist}>
@@ -78,9 +128,6 @@
                         <Icon name="square-library" />
                         {playlist.tracks.length} tracks
                     </small>
-                    {#each playlist.tracks as track (track.videoId)}
-                        <!-- <small>{JSON.stringify(track)}</small> -->
-                    {/each}
                 </div>
             </article>
         {/each}
@@ -129,6 +176,9 @@
                     {/if}
                     <button class="secondary" onclick={() => playPlaylist(playlist, 0, true)}>
                         <Icon name="shuffle" />
+                    </button>
+                    <button class="secondary" onclick={handleEditImage} title="Edit Image">
+                        <Icon name="pencil" />
                     </button>
                 </div>
             </div>
