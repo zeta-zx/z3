@@ -1,2 +1,3 @@
-# z3
-zeta-zx/z3
+# z3 frontend
+
+z3 frontend, written in Svelte.
