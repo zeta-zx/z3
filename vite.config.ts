@@ -4,7 +4,7 @@ import { defineConfig } from 'vite';
 import electron from 'vite-plugin-electron/simple'
 import { notBundle } from 'vite-plugin-electron/plugin';
 
-export default defineConfig(({ command }) => ({
+export default defineConfig({
     plugins: [
         sveltekit(),
         devtoolsJson(),
@@ -13,7 +13,7 @@ export default defineConfig(({ command }) => ({
                 entry: 'electron/main.ts',
                 vite: {
                     plugins: [
-                        command === 'serve' && notBundle(),
+                        notBundle(),
                     ],
                 },
             },
@@ -22,4 +22,4 @@ export default defineConfig(({ command }) => ({
             },
         }),
     ],
-}));
+});
