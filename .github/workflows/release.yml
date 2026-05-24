@@ -29,14 +29,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libarchive-tools
-      - name: Install system dependencies (macOS)
-        if: matrix.os == 'macos-latest'
-        run: |
-          brew install icnsutils graphicsmagick p7zip
-      - name: Install system dependencies (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          choco install -y 7zip
 
       - name: Install node dependencies
         run: npm ci
