@@ -24,7 +24,8 @@ app.whenReady().then(() => {
 
 	win.removeMenu();
 
-	autoUpdater.checkForUpdatesAndNotify();
+	autoUpdater.on('error', console.error);
+	autoUpdater.checkForUpdatesAndNotify().catch(console.error);
 
 	if (dev) {
 		win.loadURL(dev);
