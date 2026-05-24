@@ -61,7 +61,8 @@
 			{
 				"provider": "github",
 				"owner": "zeta-zx",
-				"repo": "z3"
+				"repo": "z3",
+				"releaseType": "release"
 			}
 		],
 		"artifactName": "${productName}-${version}-${os}-${arch}.${ext}"
