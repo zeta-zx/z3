@@ -45,22 +45,17 @@
 		"linux": {
 			"target": [
 				"AppImage",
-				"deb",
-				"snap"
+				"deb"
 			],
 			"icon": "static/icons",
 			"category": "AudioVideo"
 		},
 		"deb": {
-				"depends": [
-					"gconf2",
-					"libappindicator1"
-				],
-				"priority": "optional"
-			},
-		"snap": {
-			"grade": "stable",
-			"confinement": "classic"
+			"depends": [
+				"gconf2",
+				"libappindicator1"
+			],
+			"priority": "optional"
 		},
 		"publish": [
 			{
