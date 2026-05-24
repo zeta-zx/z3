@@ -28,13 +28,16 @@
                 if (!currentlyOpenPlaylist) return;
                 if (!reader.result) return;
                 currentlyOpenPlaylist.thumbnail = reader.result.toString();
-                libraryState.save(); // TODO: Update thumbnail for library.
+                libraryState.saveThumbnail(currentlyOpenPlaylist.id, reader.result.toString()); // TODO: Update thumbnail for library.
             };
         });
     }
 </script>
 
 {#if !currentlyOpenPlaylist}
+    <p>
+        Your music is located at <code>{libraryState.path}</code>.
+    </p>
     <div class="results search-results playlists">
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->

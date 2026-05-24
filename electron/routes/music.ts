@@ -138,7 +138,7 @@ function readPlaylistFile(filename: string): Playlist {
         tracks: tracks,
         createdAt: stat.birthtimeMs || stat.mtimeMs,
         isProtected,
-        thumbnail: thumbnail || (tracks.length > 0 ? tracks[0].thumbnails?.at(0)?.url : undefined)
+        thumbnail: thumbnail || (tracks.length > 0 ? tracks[0].thumbnails?.at(0)?.url : undefined),
     };
 }
 
@@ -350,6 +350,32 @@ export const routes = {
         writeFileSync(filePath, header, 'utf-8');
         
         return readPlaylistFile(filename);
+    },
+
+    async musicPlaylistUpdateThumbnail(playlistId: string, thumbnailUrl: string): Promise<Playlist | null> {
+        await init();
+        const filePath = join(musicDir, playlistId);
+        if (!existsSync(filePath)) return null;
+
+        const playlist = readPlaylistFile(playlistId);
+        playlist.thumbnail = thumbnailUrl;
+
+        const originalContent = readFileSync(filePath, 'utf-8');
+
+        const newLines: string[] = [];
+
+        for (let line of originalContent.split('\n')) {
+            if (line.startsWith('#EXTZETA:')) {
+                const headerContent = JSON.parse(line.split('#EXTZETA:').at(-1) || '{}');
+                headerContent.thumbnail = thumbnailUrl;
+                line = `#EXTZETA:${JSON.stringify(headerContent)}`;
+            }
+            newLines.push(line);
+        }
+
+        writeFileSync(filePath, newLines.join('\n'), 'utf-8');
+
+        return playlist;
     },
 
     async musicDownloadSong(track?: Song, trackId?: string, stream?: ReadStream): Promise<Song> {

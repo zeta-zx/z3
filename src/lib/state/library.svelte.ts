@@ -10,6 +10,7 @@ export function isPlayableTrack(song: Song): boolean {
 
 class LibraryStore {
     playlists = $state<Playlist[]>([]);
+    path: string = '';
 
     constructor() {
         if (!browser) return;
@@ -17,8 +18,9 @@ class LibraryStore {
     }
 
     async init() {
-        const { playlists } = await client.musicLoadLibrary();
+        const { playlists, path } = await client.musicLoadLibrary();
         this.playlists = playlists;
+        this.path = path;
     }
 
     isInPlaylist(playlistId: string, trackId: string): boolean {
@@ -66,6 +68,10 @@ class LibraryStore {
         } else {
             await this.addToPlaylist(playlistId, track);
         }
+    }
+
+    async saveThumbnail(playlistId: string, thumbnailDataURI: string): Promise<Playlist | null> {
+        return await client.musicPlaylistUpdateThumbnail(playlistId, thumbnailDataURI);
     }
 }
 
