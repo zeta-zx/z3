@@ -1,7 +1,8 @@
 import { app, BrowserWindow } from 'electron';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { autoUpdater } from 'electron-updater';
+import updater from 'electron-updater';
+const { autoUpdater } = updater;
 
 import { exposeIPC } from '@ephaptic/server/electron';
 
@@ -27,20 +28,20 @@ app.whenReady().then(() => {
 
 	if (dev) {
 		win.loadURL(dev);
-
-		win.webContents.on('before-input-event', (event, input) => {
-			if (input.key === 'F12' || (input.control && input.shift && input.key.toLowerCase() === 'i')) {
-				win.webContents.toggleDevTools();
-				event.preventDefault();
-			}
-			if (input.control && input.key.toLowerCase() === 'r') {
-				win.webContents.reload();
-				event.preventDefault();
-			}
-		});
 	} else {
 		win.loadFile(join(__dirname, '../build/index.html'));
 	}
+
+	win.webContents.on('before-input-event', (event, input) => {
+		if (input.key === 'F12' || (input.control && input.shift && input.key.toLowerCase() === 'i')) {
+			win.webContents.toggleDevTools();
+			event.preventDefault();
+		}
+		if (input.control && input.key.toLowerCase() === 'r') {
+			win.webContents.reload();
+			event.preventDefault();
+		}
+	});
 
 	exposeIPC(routes);
 });
