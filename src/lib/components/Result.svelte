@@ -3,7 +3,7 @@
     import { libraryState, isPlayableTrack } from "$lib/state/library.svelte";
     import { fade, fly } from "svelte/transition";
     import type { Song } from "$lib/schema";
-    import { formatDuration, createPlaceholderUrl, getThumbnailUrl } from "$lib/utils";
+    import { formatTime, createPlaceholderUrl, getThumbnailUrl } from "$lib/utils";
     
     interface Props {
         result: Song,
@@ -29,7 +29,7 @@
     <div class="img-wrapper">
         <img src={thumbnailUrl} alt={JSON.stringify(result)} referrerPolicy="no-referrer" /> <!-- https://stackoverflow.com/a/76662026 -->
         {#if result.duration}
-            <span title={formatDuration(result.duration)} class="duration">{formatDuration(result.duration)}</span>
+            <span title={formatTime(result.duration)} class="duration">{formatTime(result.duration)}</span>
         {/if}
         {#if isFavourited}
             <span class="isFavourited" title="In Favourites">

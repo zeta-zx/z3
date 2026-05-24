@@ -462,10 +462,12 @@ export const routes = {
             tags.unsynchronisedLyrics = { language: 'eng', text: track.lyrics };
         }
 
-        const possibleLyrics = ytMetadata ? (await ytMetadata?.getLyrics())?.description.text : jsMetadata?.lyrics?.snippet;
-        if (possibleLyrics) {
-            tags.unsynchronisedLyrics = { language: 'eng', text: possibleLyrics };
-        }
+        try {
+            const possibleLyrics = ytMetadata ? (await ytMetadata?.getLyrics())?.description.text : jsMetadata?.lyrics?.snippet;
+            if (possibleLyrics) {
+                tags.unsynchronisedLyrics = { language: 'eng', text: possibleLyrics };
+            }
+        } catch {}
 
         const firstThumb = track?.thumbnails?.at(0) ?? ytMetadata?.basic_info.thumbnail?.at(0) ?? jsMetadata?.images.at(-1);
         if (firstThumb) {
@@ -534,7 +536,7 @@ export const routes = {
 
         let content = `#EXTM3U\n${headerLine}\n`;
         for (const t of playlist.tracks) {
-            content += `./${t.id.replace('fs:', '')}.mp3\n`; // songue :P i don't know if this is right
+            content += `./${t.id.replace('fs:', '')}\n`;
         }
         writeFileSync(filePath, content, 'utf-8');
     }

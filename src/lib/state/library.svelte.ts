@@ -24,7 +24,7 @@ class LibraryStore {
     isInPlaylist(playlistId: string, trackId: string): boolean {
         const playlist = this.playlists.find(p => p.id === playlistId);
 
-        return playlist?.tracks.some(t => t.id === trackId) ?? false;
+        return playlist?.tracks.some(t => ((t.id === trackId) || t.id.includes(trackId.replace(':', '_')))) ?? false;
     }
 
     async addToPlaylist(playlistId: string, track: Song) {

@@ -12,16 +12,6 @@ export function randomChoice<T>(arr: T[]): T {
     return arr[Math.floor(Math.random() * arr.length)];
 }
 
-export function formatDuration(duration: number): string {
-    if (isNaN(duration) || !isFinite(duration) || duration < 0) return '0:00';
-
-    const totalSeconds = Math.floor(duration);
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = (totalSeconds % 60).toString().padStart(2, '0');
-
-    return `${minutes}:${seconds}`;
-}
-
 export type LrcLine = {
     time: number;
     text: string;
@@ -50,9 +40,12 @@ export function parseLrc(lrcText: string | null): LrcLine[] {
 
 export function formatTime(seconds: number) {
     if (isNaN(seconds) || !isFinite(seconds)) return "0:00";
-    const m = Math.floor(seconds / 60);
     const s = Math.floor(seconds % 60).toString().padStart(2, '0');
-    return `${m}:${s}`;
+    const m = Math.floor(seconds / 60);
+    if (seconds <= 60**2) return `${m}:${s}`;
+    const minutes = Math.floor(m % 60).toString().padStart(2, '0');
+    const h = Math.floor(m / 60);
+    return h ? `${h}:${minutes}:${s}` : `${m}:${s}`;
 }
 
 export const pad = (n: number) => n.toString().padStart(2, '0');

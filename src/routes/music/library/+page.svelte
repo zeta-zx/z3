@@ -2,7 +2,7 @@
     import Icon from "$lib/components/Icon.svelte";
     import { libraryState } from "$lib/state/library.svelte";
     import { playerState, playPlaylist } from "$lib/state/player.svelte";
-    import { formatDate, createPlaceholderUrl, getCSSVar, Font, formatDuration, getThumbnailUrl } from "$lib/utils";
+    import { formatDate, createPlaceholderUrl, getCSSVar, Font, formatTime, getThumbnailUrl } from "$lib/utils";
     import { fade, fly } from "svelte/transition";
     import type { Playlist } from "$lib/schema";
 
@@ -59,7 +59,7 @@
             </div>
         </article>
         {#each playlists as playlist (playlist.id)}
-            {@const duration = formatDuration(totalDuration(playlist))}
+            {@const duration = formatTime(totalDuration(playlist))}
             <!-- svelte-ignore (a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions) -->
             <article class="playlist" onclick={() => currentlyOpenPlaylist = playlist}>
                 <div class="img-wrapper">
@@ -97,7 +97,7 @@
     </div>
 {:else}
     {@const playlist = currentlyOpenPlaylist}
-    {@const duration = formatDuration(totalDuration(playlist))}
+    {@const duration = formatTime(totalDuration(playlist))}
     <div class="playlist-view" in:fly={{ y: 20, duration: 300 }} out:fade={{ duration: 150 }}>
         <button class="secondary back-btn" onclick={() => currentlyOpenPlaylist = null}>
             <Icon name="arrow-left" /> Back to Library

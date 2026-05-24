@@ -1,10 +1,9 @@
 <script lang="ts">
     import { client } from "$lib/ephaptic";
     import type { MusicProvider, Song } from "$lib/schema";
-    import { debounce, toTitleCase } from "$lib/utils";
+    import { debounce } from "$lib/utils";
     import Icon from "$lib/components/Icon.svelte";
-    import MusicPlayer from "$lib/components/MusicPlayer.svelte";
-    import { playerState, playTrack } from "$lib/state/player.svelte";
+    import { playTrack } from "$lib/state/player.svelte";
     import { tick } from "svelte";
     import Result from "$lib/components/Result.svelte";
 
