@@ -15,20 +15,8 @@ protocol.registerSchemesAsPrivileged([
 	{ scheme: 'zeta-app', privileges: { standard: true, secure: true, supportFetchAPI: true } }
 ])
 
-app.whenReady().then(() => {
+function createWindow() {
 	const dev = process.env.VITE_DEV_SERVER_URL;
-
-	protocol.handle('zeta-app', (request) => {
-        const url = new URL(request.url);
-
-		let filePath = join(__dirname, '../build', url.pathname);
-        
-        if (url.pathname === '/' || !existsSync(filePath)) {
-            filePath = join(__dirname, '../build/index.html');
-        }
-        
-        return net.fetch(pathToFileURL(filePath).toString());
-    });
 
 	const win = new BrowserWindow({
 		width: 1200,
@@ -41,13 +29,9 @@ app.whenReady().then(() => {
 
 	win.removeMenu();
 
-	autoUpdater.on('error', console.error);
-	autoUpdater.checkForUpdatesAndNotify().catch(console.error);
-
 	if (dev) {
 		win.loadURL(dev);
 	} else {
-		// win.loadFile(join(__dirname, '../build/index.html'));
 		win.loadURL('zeta-app://app/');
 	}
 
@@ -62,7 +46,38 @@ app.whenReady().then(() => {
 		}
 	});
 
+	return win;
+}
+
+app.whenReady().then(() => {
+	protocol.handle('zeta-app', (request) => {
+		const url = new URL(request.url);
+
+		let filePath = join(__dirname, '../build', url.pathname);
+
+		if (url.pathname === '/' || !existsSync(filePath)) {
+			filePath = join(__dirname, '../build/index.html');
+		}
+
+		return net.fetch(pathToFileURL(filePath).toString());
+	});
+
+	createWindow();
+
+	autoUpdater.on('error', console.error);
+	autoUpdater.checkForUpdatesAndNotify().catch(console.error);
+
 	exposeIPC(routes);
+
+	// macOS: re-create a window when the dock icon is clicked and none are open.
+	app.on('activate', () => {
+		if (BrowserWindow.getAllWindows().length === 0) createWindow();
+	});
+});
+
+// Quit when all windows are closed, except on macOS where apps stay active.
+app.on('window-all-closed', () => {
+	if (process.platform !== 'darwin') app.quit();
 });
 
 export type Routes = typeof routes;

@@ -10,7 +10,10 @@
     let currentPos = $state("lyric-center");
     let nextPos = $state("lyric-down");
 
-    let lyrics = $derived(parseLrc(playerState?.currentTrack?.lyrics ?? '') || playerState.lyrics);
+    let lyrics = $derived.by(() => {
+        const embedded = parseLrc(playerState?.currentTrack?.lyrics ?? '');
+        return embedded.length ? embedded : playerState.lyrics;
+    });
 
     $effect(() => {
         if (playerState.isLoading) {

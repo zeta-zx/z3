@@ -1,5 +1,6 @@
 <script lang="ts">
 	import "$lib/styles.css";
+	import Toaster from "$lib/components/Toaster.svelte";
 
 	let { children } = $props();
 </script>
@@ -12,6 +13,8 @@
 <main class="container">
 	{@render children()}
 </main>
+
+<Toaster />
 
 <footer>
 	<small>

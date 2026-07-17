@@ -45,7 +45,7 @@
         try {
             results = await client.musicSearch(searchValue, $state.snapshot(searchProvider)); // searchType
         } catch (err: any) {
-            errorMessage = err;
+            errorMessage = err?.message ?? String(err);
             return;
         } finally {
             isLoading = false;

@@ -184,10 +184,22 @@ export function updateThumbnailUrl(url?: string): string {
     else return url;
 }
 
+// Cache object URLs so repeated reactive reads of the same thumbnail don't
+// leak a fresh blob URL every render.
+const objectUrlCache = new WeakMap<object, string>();
+
+function dataThumbnailUrl(data: Uint8Array, mimetype: string): string {
+    const cached = objectUrlCache.get(data);
+    if (cached) return cached;
+    const url = URL.createObjectURL(new Blob([new Uint8Array(data)], { type: mimetype }));
+    objectUrlCache.set(data, url);
+    return url;
+}
+
 export function getThumbnailUrl(thumbnails?: Thumbnail[], fallbackTitle: string = "N/A") {
     let thumbnail = (thumbnails || []).toSorted((a, b) => (a.height ?? 0) - (b.height ?? 0)).at(-1);
     if (thumbnail?.url) return updateThumbnailUrl(thumbnail.url);
-    if (thumbnail?.data && thumbnail?.mimetype) return URL.createObjectURL(new Blob([new Uint8Array(thumbnail.data)], { type: thumbnail.mimetype }));
+    if (thumbnail?.data && thumbnail?.mimetype) return dataThumbnailUrl(thumbnail.data, thumbnail.mimetype);
     return createPlaceholderUrl({
         height: 64,
         text: fallbackTitle,

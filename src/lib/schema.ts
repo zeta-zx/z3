@@ -9,10 +9,11 @@ export interface Song {
     lyrics?: string | null; // if undefined then use another call to find them
 
     id: string;
-    // fs:path/to/file.mp3
-    // yt:<yt_video_id>
-    // spotify:<spotify_id>
-    // etc. etc.
+    // Canonical source id:
+    //   yt:<youtube_video_id>
+    //   js:<jiosaavn_song_id>
+    //   local:<filename>        (a file imported directly into the music dir)
+    // `isDownloaded` (not the id) reflects whether the audio is stored on disk.
 
     isDownloaded: boolean;
 }

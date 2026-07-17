@@ -62,9 +62,9 @@
             artist: track.artists.map(a => a.name).join(', '),
             album: 'album' in track && track.album? track.album.title : 'Zeta Music',
             artwork: track.thumbnails.map(t => ({
-                src: updateThumbnailUrl(t.url) ?? URL.createObjectURL(new Blob([new Uint8Array(t.data!)], { type: t.mimetype })),
+                src: t.url ? updateThumbnailUrl(t.url) : (t.data ? URL.createObjectURL(new Blob([new Uint8Array(t.data)], { type: t.mimetype })) : ''),
                 sizes: `${t.width}x${t.height}`,
-                type: 'image/jpeg',
+                type: t.mimetype ?? 'image/jpeg',
             })),
         });
     });
@@ -153,6 +153,14 @@
 						aria-current={page.url.pathname === '/music/library' ? 'page' : undefined}
 					>
 						<Icon name="library-big" /> Library
+					</a>
+				</li>
+				<li>
+					<a
+						href="/music/settings"
+						aria-current={page.url.pathname === '/music/settings' ? 'page' : undefined}
+					>
+						<Icon name="settings" /> Settings
 					</a>
 				</li>
             </ul>

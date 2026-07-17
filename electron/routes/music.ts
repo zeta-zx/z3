@@ -1,319 +1,412 @@
 import { Innertube, Platform, type Types } from 'youtubei.js';
 import { Song as Saavn } from '@saavn-labs/sdk';
 
-import { Readable } from 'node:stream';
-import { existsSync, writeFileSync, readFileSync, mkdirSync, readdirSync, statSync, appendFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join, basename } from 'node:path';
-import NodeID3 from 'node-id3';
-
-import ffmpeg from 'fluent-ffmpeg';
-import ffmpegStatic from 'ffmpeg-static';
-
-const ffmpegPath = ffmpegStatic!.replace('app.asar', 'app.asar.unpacked');
-ffmpeg.setFfmpegPath(ffmpegPath);
+import { dialog } from 'electron';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 import type { Playlist, Song, Stream, Library, Thumbnail, MusicProvider } from '../../src/lib/schema';
 import { updateThumbnailUrl } from '../../src/lib/utils';
 
-const musicDir = join(homedir(), 'Music', 'Zeta');
-if (!existsSync(musicDir)) mkdirSync(musicDir, { recursive: true });
+import { createVFS, type VFS } from '../lib/vfs';
+import { getConfig, saveConfig } from '../lib/config';
+import { MetadataStore, embedMp4Tags, readMp4Tags, type IndexRecord } from '../lib/metadata';
+import { buildMuzzaBackup, parseMuzzaBackup } from '../lib/muzza';
+
+const DEBUG = !!process.env.ZETA_DEBUG;
+function log(...args: any[]) {
+    if (DEBUG) console.log(...args);
+}
+
+const AUDIO_EXTENSIONS = ['.m4a', '.mp4'];
+
+/* -------------------------------------------------------------------------- */
+/*                              storage bootstrap                             */
+/* -------------------------------------------------------------------------- */
+
+let vfs: VFS;
+let metadata: MetadataStore;
+let storageReady: Promise<void> | null = null;
+
+async function initStorage(): Promise<void> {
+    const created = await createVFS(getConfig().musicDir);
+    if (vfs) await vfs.dispose().catch(() => {});
+    vfs = created;
+    if (metadata) metadata.setVfs(vfs);
+    else metadata = new MetadataStore(vfs);
+    // Make sure the root directory exists (esp. for freshly-configured remotes).
+    await vfs.mkdir('').catch(() => {});
+}
+
+function ensureStorage(): Promise<void> {
+    if (!storageReady) storageReady = initStorage();
+    return storageReady;
+}
+
+async function reloadStorage(): Promise<void> {
+    storageReady = initStorage();
+    await storageReady;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                  youtube                                   */
+/* -------------------------------------------------------------------------- */
 
 let yt: Innertube;
 
 async function init() {
+    await ensureStorage();
     if (!yt) yt = await Innertube.create({});
 }
 
-function log(...args: any[]) {
-    if (true) console.log(...args);
+Platform.shim.eval = async (data: Types.BuildScriptResult) => new Function(data.output)();
+
+/* -------------------------------------------------------------------------- */
+/*                                  helpers                                   */
+/* -------------------------------------------------------------------------- */
+
+function splitId(id: string): { protocol: string; cleanId: string } {
+    const [protocol, ...rest] = id.split(':');
+    return { protocol, cleanId: rest.join(':') };
 }
 
-Platform.shim.eval = async (data: Types.BuildScriptResult) => { return new Function(data.output)();; };
-
-interface ReadStream {
-    data: ReadableStream<Uint8Array>;
-    mimetype: string;
+function sanitiseFilename(name: string): string {
+    return name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').replace(/[. ]+$/, '');
 }
 
-async function downloadAsMp3(stream: ReadableStream<Uint8Array>, mp3Path: string): Promise<void> {
-    await init();
-
-    log(`    - - - Let's download this stream to ${mp3Path}, using a promise.`);
-
-    return new Promise((resolve, reject) => {
-        ffmpeg(Readable.fromWeb(stream as any))
-            .audioCodec('libmp3lame')
-            .audioBitrate(192)
-            .format('mp3')
-            .save(mp3Path)
-            .on('end', () => resolve())
-            .on('error', (err: any) => reject(err));
-    });
+function buildFilename(title: string, artist: string, id: string): string {
+    const base = sanitiseFilename(`${title}${artist ? ` | ${artist}` : ''}`) || 'Untitled';
+    return `${base} [${id.replaceAll(':', '_')}].m4a`;
 }
 
-function getSongFromMp3(filePath: string): Song | null {
-    if (!existsSync(filePath)) return null;
+function isAudioFile(name: string): boolean {
+    return AUDIO_EXTENSIONS.some((ext) => name.toLowerCase().endsWith(ext));
+}
 
-    const filename = basename(filePath);
-    const tags = NodeID3.read(filePath);
+async function webStreamToBuffer(stream: ReadableStream<Uint8Array>): Promise<Buffer> {
+    const reader = stream.getReader();
+    const chunks: Buffer[] = [];
+    for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) chunks.push(Buffer.from(value));
+    }
+    return Buffer.concat(chunks);
+}
 
-    const durationObj = tags.userDefinedText?.find(t => t.description === 'duration');
-    
-    const duration = durationObj ? parseFloat(durationObj.value) : 0;
+function pickBestThumbnail(thumbnails: Thumbnail[]): Thumbnail | undefined {
+    return [...(thumbnails || [])].sort((a, b) => (a.width ?? a.height ?? 0) - (b.width ?? b.height ?? 0)).at(-1);
+}
 
-    const artistNames = tags.artist ? tags.artist.split(/,\s*|\s*\/\s*/) : ['Unknown Artist'];
-    const artists = artistNames.map(name => ({
-        name,
-        thumbnails: []
-    }));
+/** Resolve cover-art bytes for embedding, from thumbnail data or by fetching a URL. */
+async function resolveCover(thumbnails: Thumbnail[]): Promise<{ data: Uint8Array; mimetype: string } | null> {
+    const withData = (thumbnails || []).find((t) => t.data?.length);
+    if (withData?.data) return { data: withData.data, mimetype: withData.mimetype || 'image/jpeg' };
 
-    const thumbnails: Thumbnail[] = [];
-    if (tags.image && typeof tags.image === 'object') {
-        const img = tags.image as any;
-        thumbnails.push({
-            data: new Uint8Array(img.imageBuffer),
-            mimetype: img.mime || 'image/jpeg'
-        });
+    const best = pickBestThumbnail(thumbnails);
+    if (best?.url) {
+        try {
+            const res = await fetch(updateThumbnailUrl(best.url), {
+                headers: { 'User-Agent': 'Mozilla/5.0' },
+                redirect: 'follow',
+            });
+            if (res.ok) {
+                return {
+                    data: new Uint8Array(await res.arrayBuffer()),
+                    mimetype: res.headers.get('Content-Type') || 'image/jpeg',
+                };
+            }
+        } catch {
+            /* ignore unreachable thumbnail URLs */
+        }
+    }
+    return null;
+}
+
+/* --------------------------- playlist file model -------------------------- */
+
+interface PlaylistMeta {
+    name: string;
+    isProtected: boolean;
+    thumbnail: string;
+}
+
+/** Build the resource + #EXTINF lines used to represent a song in an m3u8 file. */
+function playlistLinesForSong(song: Song, record?: IndexRecord): string {
+    const artist = song.artists.map((a) => a.name).join(', ');
+    const extinf = `#EXTINF:${Math.round(song.duration || 0)},${artist} - ${song.title}`;
+    // Downloaded songs are referenced by their file so external players work too.
+    const resource = record?.file ? `./${record.file}` : song.id;
+    return `#EXTINF-ZETA:${song.id}\n${extinf}\n${resource}`;
+}
+
+async function songForPlaylistLine(resource: string, knownId: string | null): Promise<Song | null> {
+    const trimmed = resource.trim();
+    if (!trimmed) return null;
+
+    // Prefer the canonical id captured from the #EXTINF-ZETA directive.
+    if (knownId) {
+        const record = await metadata.get(knownId);
+        if (record) return MetadataStore.toSong(record);
     }
 
-    const thumbnailUrlObj = tags.userDefinedText?.find(t => t.description === 'thumbnailURL');
-    if (thumbnailUrlObj) {
-        thumbnails.push({
-            url: thumbnailUrlObj.value,
-        })
+    // A file reference (downloaded track).
+    if (trimmed.startsWith('./') || isAudioFile(trimmed)) {
+        const file = trimmed.replace(/^\.\//, '');
+        const record = await metadata.getByFile(file);
+        if (record) return MetadataStore.toSong(record);
+
+        // File exists but isn't indexed: read its embedded tags (local only).
+        if (vfs.isLocal && (await vfs.exists(file))) {
+            const local = vfs.localPath(file);
+            const tags = local ? await readMp4Tags(local) : null;
+            if (tags) {
+                return {
+                    id: `local:${file}`,
+                    title: tags.title || file,
+                    thumbnails: tags.thumbnails,
+                    artists: tags.artists,
+                    album: tags.album,
+                    duration: tags.duration,
+                    year: tags.year,
+                    lyrics: tags.lyrics,
+                    isDownloaded: true,
+                };
+            }
+        }
+        return null;
     }
 
-    return {
-        id: `fs:${filename}`,
-        title: tags.title || filename.replace('.mp3', '').replace(/_/g, ' '),
-        thumbnails,
-        artists,
-        album: tags.album ? {
-            title: tags.album,
-            artists: artists,
-            thumbnails: thumbnails,
-            year: tags.year
-        } : null,
-        duration,
-        lyrics: tags.unsynchronisedLyrics?.text || null,
-        year: tags.year,
-        isDownloaded: true,
+    // A bare canonical id (off-disk / not downloaded).
+    const record = await metadata.get(trimmed);
+    if (record) return MetadataStore.toSong(record);
+
+    // Nothing indexed — we cannot rebuild rich metadata, so drop it.
+    return null;
+}
+
+async function readPlaylistFile(filename: string): Promise<Playlist> {
+    const content = (await vfs.readFile(filename)).toString('utf-8');
+    let stat = { birthtimeMs: 0, mtimeMs: 0, size: 0 };
+    try {
+        stat = await vfs.stat(filename);
+    } catch {
+        /* stat may be unavailable on some remotes */
+    }
+
+    const meta: PlaylistMeta = {
+        name: filename.replace('.m3u8', ''),
+        isProtected: filename === 'favourites.m3u8',
+        thumbnail: '',
     };
-}
 
-function readPlaylistFile(filename: string): Playlist {
-    const filePath = join(musicDir, filename);
-    const stat = statSync(filePath);
-    const content = readFileSync(filePath, 'utf-8');
-    
-    let displayName = filename.replace('.m3u8', '');
-    let isProtected = filename === 'favourites.m3u8';
-    let thumbnail = '';
-    
     const tracks: Song[] = [];
     const lines = content.split('\n');
+    let pendingId: string | null = null;
 
-    for (const line of lines) {
+    for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) continue;
+
         if (line.startsWith('#EXTZETA:')) {
             try {
-                const meta = JSON.parse(line.substring(9));
-                displayName = meta.name || displayName;
-                isProtected = meta.isProtected !== undefined ? meta.isProtected : isProtected;
-                thumbnail = meta.thumbnail || '';
-            } catch (e) { /* ignore */ }
-        } else if (line.trim() && !line.startsWith('#')) {
-            const songPath = line.trim().startsWith('.') 
-                ? join(musicDir, line.trim()) 
-                : line.trim();
-                
-            const song = getSongFromMp3(songPath);
+                const parsed = JSON.parse(line.substring('#EXTZETA:'.length));
+                meta.name = parsed.name ?? meta.name;
+                meta.isProtected = parsed.isProtected ?? meta.isProtected;
+                meta.thumbnail = parsed.thumbnail ?? meta.thumbnail;
+            } catch {
+                /* ignore malformed header */
+            }
+        } else if (line.startsWith('#EXTINF-ZETA:')) {
+            pendingId = line.substring('#EXTINF-ZETA:'.length).trim();
+        } else if (line.startsWith('#')) {
+            /* standard m3u directives (#EXTM3U, #EXTINF) — ignored */
+        } else {
+            const song = await songForPlaylistLine(line, pendingId);
             if (song) tracks.push(song);
+            pendingId = null;
         }
     }
 
     return {
         id: filename,
-        name: displayName,
-        tracks: tracks,
-        createdAt: stat.birthtimeMs || stat.mtimeMs,
-        isProtected,
-        thumbnail: thumbnail || (tracks.length > 0 ? tracks[0].thumbnails?.at(0)?.url : undefined),
+        name: meta.name,
+        tracks,
+        createdAt: stat.birthtimeMs || stat.mtimeMs || Date.now(),
+        isProtected: meta.isProtected,
+        thumbnail: meta.thumbnail || pickBestThumbnail(tracks[0]?.thumbnails || [])?.url,
     };
 }
 
+function playlistHeader(meta: PlaylistMeta): string {
+    return `#EXTM3U\n#EXTZETA:${JSON.stringify(meta)}\n`;
+}
+
+/** Rewrite a playlist file from an ordered list of songs, preserving its header. */
+async function writePlaylist(filename: string, songs: Song[], meta: PlaylistMeta): Promise<void> {
+    let content = playlistHeader(meta);
+    for (const song of songs) {
+        const record = await metadata.get(song.id);
+        content += `${playlistLinesForSong(song, record)}\n`;
+    }
+    await vfs.writeFile(filename, content);
+}
+
+async function readPlaylistMeta(filename: string): Promise<PlaylistMeta> {
+    const meta: PlaylistMeta = {
+        name: filename.replace('.m3u8', ''),
+        isProtected: filename === 'favourites.m3u8',
+        thumbnail: '',
+    };
+    try {
+        const content = (await vfs.readFile(filename)).toString('utf-8');
+        const headerLine = content.split('\n').find((l) => l.startsWith('#EXTZETA:'));
+        if (headerLine) {
+            const parsed = JSON.parse(headerLine.substring('#EXTZETA:'.length));
+            meta.name = parsed.name ?? meta.name;
+            meta.isProtected = parsed.isProtected ?? meta.isProtected;
+            meta.thumbnail = parsed.thumbnail ?? meta.thumbnail;
+        }
+    } catch {
+        /* use defaults */
+    }
+    return meta;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                   routes                                   */
+/* -------------------------------------------------------------------------- */
+
 export const routes = {
     async musicLyrics(track: Song): Promise<string | null> {
-        log(`Looks like someone wants some lyrics! ${track.title}`);
         try {
             const res = await fetch(
-                `https://lrclib.net/api/get?artist_name=${encodeURIComponent(track.artists.map(a=>a.name).join(', '))}&track_name=${encodeURIComponent(track.title)}&duration=${Math.round(track.duration)}`,
-                { headers: { 'User-Agent': 'Zeta Music (https://github.com/zeta-zx/z3)' }, },
+                `https://lrclib.net/api/get?artist_name=${encodeURIComponent(track.artists.map((a) => a.name).join(', '))}&track_name=${encodeURIComponent(track.title)}&duration=${Math.round(track.duration)}`,
+                { headers: { 'User-Agent': 'Zeta Music (https://github.com/zeta-zx/z3)' } },
             );
 
             if (!res.ok) return null;
-            
-            const data = await res.json() as any;
-            log(`We have lyrics! Let's return them. ${res} ${data}`);
+
+            const data = (await res.json()) as any;
             return data.syncedLyrics || data.plainLyrics || null;
         } catch (err) {
-            console.error("LrcLib fetch failed:", err);
+            console.error('LrcLib fetch failed:', err);
             return null;
         }
     },
 
     async musicSearchSuggestions(query: string): Promise<string[]> {
         await init();
-
-        return (await yt.music.getSearchSuggestions(query))[0].contents.map((suggestion: any) => suggestion.suggestion.text);
+        return (await yt.music.getSearchSuggestions(query))[0].contents.map((s: any) => s.suggestion.text);
     },
 
     async musicSearch(query: string, provider: MusicProvider): Promise<Song[]> {
         await init();
 
-        const files = readdirSync(musicDir).filter(f => f.endsWith('.mp3'));
-       
+        const downloaded = new Set((await metadata.all()).filter((r) => r.file).map((r) => r.id));
+
         switch (provider) {
             case 'yt': {
                 const res = await yt.music.search(query, { type: 'song' });
 
-                return (res.songs?.contents || []).map(song => {
-                    const match = files.find(f => f.endsWith(`[yt_${song.id}].mp3`));
+                return (res.songs?.contents || []).map((song) => {
+                    const id = `yt:${song.id}`;
                     return {
-                        id: match ? `fs:${match}` : `yt:${song.id}`,
+                        id,
                         title: song.title || 'Untitled',
-                        thumbnails: song.thumbnails.map(t => ({
-                            url: t.url,
-                            width: t.width,
-                            height: t.height,
-                        })),
-                        artists: (song.artists || []).map(a => ({
-                            name: a.name,
-                            thumbnails: [], // no thumbnails! unless we fetch from channel ID
-                        })),
-                        album: song.album ? {
-                            title: song.album.name,
-                            artists: [], // no artists either!
-                            thumbnails: [], // or thumbnails
-                        } : null,
+                        thumbnails: song.thumbnails.map((t) => ({ url: t.url, width: t.width, height: t.height })),
+                        artists: (song.artists || []).map((a) => ({ name: a.name, thumbnails: [] })),
+                        album: song.album ? { title: song.album.name, artists: [], thumbnails: [] } : null,
                         duration: song.duration?.seconds || 0,
-                        isDownloaded: !!match,
-                    }
+                        isDownloaded: downloaded.has(id),
+                    };
                 });
             }
 
             case 'js': {
                 const res = await Saavn.search({ query, limit: 30 });
 
-                return (res.results.map(s => {
-                    const match = files.find(f => f.endsWith(`[js_${s.id}].mp3`));
+                return res.results.map((s) => {
+                    const id = `js:${s.id}`;
                     return {
-                        id: match ? `fs:${match}` : `js:${s.id}`,
+                        id,
                         title: s.title || 'Untitled Song',
-                        thumbnails: s.images.map(i => ({
+                        thumbnails: s.images.map((i) => ({
                             url: i.url,
                             width: parseInt(i.resolution.split('x')[0]),
                             height: parseInt(i.resolution.split('x')[1]),
                         })),
-                        artists: (s.artists && s.artists.all) ? s.artists.all.slice(0, 3).map(a => ({
-                            name: a.name,
-                            thumbnails: a.images.map(i => ({
-                                url: i.url,
-                                width: parseInt(i.resolution.split('x')[0]),
-                                height: parseInt(i.resolution.split('x')[1]),
-                            })),
-                        })) : [],
-                        album: s.album ? {
-                            title: s.album.title || 'Untitled Album',
-                            artists: [],
-                            thumbnails: [],
-                        } : null,
+                        artists:
+                            s.artists && s.artists.all
+                                ? s.artists.all.slice(0, 3).map((a) => ({
+                                      name: a.name,
+                                      thumbnails: a.images.map((i) => ({
+                                          url: i.url,
+                                          width: parseInt(i.resolution.split('x')[0]),
+                                          height: parseInt(i.resolution.split('x')[1]),
+                                      })),
+                                  }))
+                                : [],
+                        album: s.album ? { title: s.album.title || 'Untitled Album', artists: [], thumbnails: [] } : null,
                         duration: s.duration || 0,
-                        isDownloaded: !!match,
-                    }
-                }))
+                        isDownloaded: downloaded.has(id),
+                    };
+                });
             }
         }
 
-        throw new Error(`Provider '${provider}' not supported for searching.`)
+        throw new Error(`Provider '${provider}' not supported for searching.`);
     },
 
+    /**
+     * Return playable audio bytes for a track.
+     *
+     * Downloaded tracks are read from the music directory. Remote (yt/js)
+     * tracks that aren't downloaded are streamed straight through and returned
+     * WITHOUT being written to disk — they only live in the frontend cache
+     * until the user explicitly adds them to a playlist.
+     */
     async musicStream(id: string, encryptedJioSaavnUrl?: string): Promise<Stream> {
         await init();
-        const [ protocol, ...rest ] = id.split(':');
-        const cleanId = rest.join('');
+        const { protocol, cleanId } = splitId(id);
 
-        log(`Requested stream for ${id}`);
-        log(` - That's '${protocol}' and ID '${cleanId}'.`);
+        log(`Requested stream for ${id} (${protocol}/${cleanId})`);
+
+        // Already downloaded? Serve from storage.
+        const record = await metadata.get(id);
+        if (record?.file && (await vfs.exists(record.file))) {
+            return { data: new Uint8Array(await vfs.readFile(record.file)), mimetype: 'audio/mp4' };
+        }
 
         switch (protocol) {
-            case 'fs': {
-                const songPath = join(musicDir, cleanId);
-                log(` - That's a filesystem path - ${songPath}`);
-
-                if (!existsSync(songPath)) {
-                    throw new Error(`Track ${cleanId} not found on disk`);
-                }
-
-                log(` - This file exists. Reading and returning...`);
-
-                const buffer = readFileSync(songPath);
-                return {
-                    data: new Uint8Array(buffer),
-                    mimetype: "audio/mp3"
-                };
+            case 'fs':
+            case 'local': {
+                const file = cleanId;
+                if (!(await vfs.exists(file))) throw new Error(`Track ${file} not found in music directory`);
+                return { data: new Uint8Array(await vfs.readFile(file)), mimetype: 'audio/mp4' };
             }
             case 'yt': {
-                log(` - That's a YouTube ID. Downloading audio with quality best...`);
-                const stream = await yt.download(cleanId, {
-                    type: 'audio',
-                    quality: 'best',
-                    client: 'ANDROID_VR',
-                });
-
-                log(` - We've got the stream.`);
-
-
-                const streamObj: ReadStream = {
-                    data: stream,
-                    mimetype: 'audio/mp4',
-                }
-
-                log(` - Feeding this stream back to the downloadSong function.`);
-
-                const fsSong = await routes.musicDownloadSong(undefined, id, streamObj)
-
-                log(` - Download Song finished. Returning Stream object.`);
-                log(` - Wait... I don't know how to do that.`);
-                log(` - Eh... I'll just recurse and hope for the best LOL.`);
-                log(` - Pretty sure musicDownloadSong returns an object with 'fs:' anyway. If it's not then we're doomed to recurse forever :P`)
-
-                return routes.musicStream(fsSong.id);
+                const stream = await yt.download(cleanId, { type: 'audio', quality: 'best', client: 'ANDROID_VR' });
+                return { data: new Uint8Array(await webStreamToBuffer(stream)), mimetype: 'audio/mp4' };
             }
             case 'js': {
-                log(` - That's a JioSaavn ID. Let's download it.`);
-
                 if (!encryptedJioSaavnUrl) {
-                    log(` - We weren't given the encrypted JioSaavn URL; let's go ahead and find it now.`);
                     const song = (await Saavn.getById({ songIds: cleanId })).songs?.[0];
-                    if (!song) throw new Error(`JioSaavn Song not found for ID ${cleanId}.`);
+                    if (!song) throw new Error(`JioSaavn song not found for ID ${cleanId}.`);
                     encryptedJioSaavnUrl = song.media?.encryptedUrl;
-                    if (!encryptedJioSaavnUrl) throw new Error(`No encrypted media URL found for the song!`);
+                    if (!encryptedJioSaavnUrl) throw new Error('No encrypted media URL found for the song!');
                 }
 
-                log(` - Here's the encrypted URL: '${encryptedJioSaavnUrl}'`);
+                const url = (await Saavn.experimental.fetchStreamUrls(encryptedJioSaavnUrl, 'edge', true))
+                    .toSorted((a, b) => parseInt(a.bitrate) - parseInt(b.bitrate))
+                    .at(-1);
 
-                const url = (await Saavn.experimental.fetchStreamUrls(encryptedJioSaavnUrl, 'edge', true)).toSorted(
-                    (a, b) => (parseInt(a.bitrate) - parseInt(b.bitrate))
-                ).at(-1);
-                // seriously who the fuck vibecoded this library :(
-
-                if (!url) throw new Error(`Failed to decrypt the media URL. And no, I don't know why.`);
+                if (!url) throw new Error('Failed to decrypt the JioSaavn media URL.');
 
                 const res = await fetch(url.url, { headers: { 'User-Agent': 'Mozilla/5.0' }, redirect: 'follow' });
-                const fsSong = await routes.musicDownloadSong(undefined, id, { mimetype: res.headers.get('Content-Type') || 'audio/mp4', data: res.body! });;
-
-                return routes.musicStream(fsSong.id);
+                return {
+                    data: new Uint8Array(await res.arrayBuffer()),
+                    mimetype: res.headers.get('Content-Type') || 'audio/mp4',
+                };
             }
         }
 
@@ -322,248 +415,397 @@ export const routes = {
 
     async musicLoadLibrary(): Promise<Library> {
         await init();
-        const favPath = join(musicDir, 'favourites.m3u8');
-        if (!existsSync(favPath)) {
-            const header = `#EXTM3U\n#EXTZETA:${JSON.stringify({ name: 'Favourites', isProtected: true, thumbnail: '' })}\n`;
-            writeFileSync(favPath, header, 'utf-8');
+
+        if (!(await vfs.exists('favourites.m3u8'))) {
+            await vfs.writeFile(
+                'favourites.m3u8',
+                playlistHeader({ name: 'Favourites', isProtected: true, thumbnail: '' }),
+            );
         }
 
-        const files = readdirSync(musicDir, { withFileTypes: true });
+        const entries = await vfs.readdir('');
         const playlists: Playlist[] = [];
 
-        for (const file of files) {
-            if (file.isFile() && file.name.endsWith('.m3u8')) {
-                playlists.push(readPlaylistFile(file.name));
+        for (const entry of entries) {
+            if (entry.isFile && entry.name.endsWith('.m3u8')) {
+                try {
+                    playlists.push(await readPlaylistFile(entry.name));
+                } catch (err) {
+                    console.error(`[library] Failed to read playlist ${entry.name}:`, err);
+                }
             }
         }
 
-        return { playlists, path: musicDir };
+        return { playlists, path: vfs.root };
     },
 
     async musicPlaylistCreate(name: string): Promise<Playlist> {
         await init();
-        const safeName = name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+        const safeName = name.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'playlist';
         const filename = `${safeName}_${Date.now()}.m3u8`;
-        const filePath = join(musicDir, filename);
-        
-        const header = `#EXTM3U\n#EXTZETA:${JSON.stringify({ name, isProtected: false, thumbnail: '' })}\n`;
-        writeFileSync(filePath, header, 'utf-8');
-        
+        await vfs.writeFile(filename, playlistHeader({ name, isProtected: false, thumbnail: '' }));
         return readPlaylistFile(filename);
+    },
+
+    async musicPlaylistRename(playlistId: string, name: string): Promise<Playlist | null> {
+        await init();
+        if (!(await vfs.exists(playlistId))) return null;
+        const meta = await readPlaylistMeta(playlistId);
+        if (meta.isProtected) throw new Error('This playlist cannot be renamed.');
+
+        const playlist = await readPlaylistFile(playlistId);
+        meta.name = name;
+        await writePlaylist(playlistId, playlist.tracks, meta);
+        return readPlaylistFile(playlistId);
+    },
+
+    async musicPlaylistDelete(playlistId: string): Promise<void> {
+        await init();
+        if (!(await vfs.exists(playlistId))) return;
+        const meta = await readPlaylistMeta(playlistId);
+        if (meta.isProtected) throw new Error('This playlist cannot be deleted.');
+        await vfs.unlink(playlistId);
+    },
+
+    async musicPlaylistReorder(playlistId: string, orderedTrackIds: string[]): Promise<Playlist | null> {
+        await init();
+        if (!(await vfs.exists(playlistId))) return null;
+
+        const playlist = await readPlaylistFile(playlistId);
+        const byId = new Map(playlist.tracks.map((t) => [t.id, t]));
+        const reordered = orderedTrackIds.map((id) => byId.get(id)).filter((t): t is Song => !!t);
+        // Append any tracks that weren't in the provided order (safety).
+        for (const track of playlist.tracks) if (!orderedTrackIds.includes(track.id)) reordered.push(track);
+
+        await writePlaylist(playlistId, reordered, await readPlaylistMeta(playlistId));
+        return readPlaylistFile(playlistId);
     },
 
     async musicPlaylistUpdateThumbnail(playlistId: string, thumbnailUrl: string): Promise<Playlist | null> {
         await init();
-        const filePath = join(musicDir, playlistId);
-        if (!existsSync(filePath)) return null;
+        if (!(await vfs.exists(playlistId))) return null;
 
-        const playlist = readPlaylistFile(playlistId);
+        const meta = await readPlaylistMeta(playlistId);
+        const playlist = await readPlaylistFile(playlistId);
+        meta.thumbnail = thumbnailUrl;
+        await writePlaylist(playlistId, playlist.tracks, meta);
+
         playlist.thumbnail = thumbnailUrl;
-
-        const originalContent = readFileSync(filePath, 'utf-8');
-
-        const newLines: string[] = [];
-
-        for (let line of originalContent.split('\n')) {
-            if (line.startsWith('#EXTZETA:')) {
-                const headerContent = JSON.parse(line.split('#EXTZETA:').at(-1) || '{}');
-                headerContent.thumbnail = thumbnailUrl;
-                line = `#EXTZETA:${JSON.stringify(headerContent)}`;
-            }
-            newLines.push(line);
-        }
-
-        writeFileSync(filePath, newLines.join('\n'), 'utf-8');
-
         return playlist;
     },
 
-    async musicDownloadSong(track?: Song, trackId?: string, stream?: ReadStream): Promise<Song> {
+    /**
+     * Download a track into the music directory (storing metadata in the index
+     * and, for local storage, embedding native MP4 tags). Returns the resulting
+     * downloaded {@link Song}. If the track is already downloaded it is returned
+     * as-is without re-fetching.
+     */
+    async musicDownloadSong(track?: Song, trackId?: string): Promise<Song> {
         await init();
 
-        if (!track && !trackId) throw new Error("At least one of `track` or `trackId` must be given.");
+        if (!track && !trackId) throw new Error('At least one of `track` or `trackId` must be given.');
 
         const id = track ? track.id : trackId!;
+        const { protocol, cleanId } = splitId(id);
 
-        const [ protocol, ...rest ] = id.split(':');
-        const cleanId = rest.join('');
-
-        log(`  -  - Downloading song: '${protocol}', '${cleanId}'`);
-
-        let mp3Path: string;
-        let ytMetadata: Awaited<ReturnType<Innertube["music"]["getInfo"]>> | undefined = undefined; // cuz i can't find TrackInfo type :P
-        let jsMetadata: Awaited<ReturnType<typeof Saavn["search"]>>["results"][number] | undefined = undefined;
-
-        let newTrack: Song;
-
-        if (track) newTrack = track;
-        else newTrack = {
-            title: 'Untitled',
-            thumbnails: [],
-            artists: [],
-            album: null,
-            duration: 0,
-            id,
-            isDownloaded: true,
-        };
-
-        if (protocol === 'fs') {
-            mp3Path = join(musicDir, cleanId);
-        } else if (protocol === 'yt') {
-            ytMetadata = await yt.music.getInfo(cleanId);
-            newTrack.id = 'fs:' + (ytMetadata.basic_info ? `${ytMetadata.basic_info.title} | ${ytMetadata.basic_info.author ?? ytMetadata.basic_info.channel?.name}` : cleanId).replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').replace(/[. ]+$/, '') + `[${id.replaceAll(':', '_')}]` + '.mp3';
-            mp3Path = join(musicDir, newTrack.id.replace('fs:', ''));
-        } else if (protocol === 'js') {
-            jsMetadata = (await Saavn.getById({ songIds: cleanId })).songs[0];
-            newTrack.id = 'fs:' + (jsMetadata ? `${jsMetadata.title} ${jsMetadata.subtitle} | ${jsMetadata.artists?.primary?.[0].name}` : cleanId).replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').replace(/[. ]+$/, '') + `[${id.replaceAll(':', '_')}]` + '.mp3';
-            mp3Path = join(musicDir, newTrack.id.replace('fs:', ''));
-        } else {
-            throw new Error("Unsupported ID protocol. Maybe you are using a wrong version.");
+        // Fast path: already downloaded.
+        const existing = await metadata.get(id);
+        if (existing?.file && (await vfs.exists(existing.file))) {
+            return MetadataStore.toSong(existing);
         }
 
-        log(`  - - Okay, so the file path will be '${mp3Path}'.`);
-        
-        if (!existsSync(mp3Path)) {
-            log(`  - - This file doesn't exist yet. Let's fetch the data. Are we already provided with a stream? ${!!stream ? 'Yes' : 'No'}.`);
-            const data = stream ?? await routes.musicStream(id);
-            log(`  - - Perfect, we've got the stream now. Let's check the mimetype... ${data.mimetype}`);
-            if (data.mimetype === 'audio/mp4') {
-                if (!(data.data instanceof ReadableStream)) throw new Error("We got an audio/mp4 for a stream that isn't a ReadableStream."); // We can fix this if we want. But I don't want to. I want to see if this even appears in the wild first.
-                log(`  - - Alright, let's download this as mp3 from the stream data.`);
-                await downloadAsMp3(data.data, mp3Path);
-            } else {
-                log(`  - - Amazing! It's already an mp3. Let's just write this to ${mp3Path} now, and that'll be that.`);
-                if (data.data instanceof ReadableStream) throw new Error("It's the opposite! We got a (presumably) audio/mp3 stream for a ReadableStream! Shocking... anyway.."); // We can easily solve this too. But again, I'm a bit curious so I'll just leave it to fail loudly.
-                writeFileSync(mp3Path, data.data);
-            }
-        }
+        log(`Downloading song ${id} (${protocol}/${cleanId})`);
 
-        log(`  - - All done! Now let's just set some metadata...`);
+        let title = track?.title || 'Untitled';
+        let artists = track?.artists ? [...track.artists] : [];
+        let album = track?.album ?? null;
+        let year = track?.year;
+        let duration = track?.duration ?? 0;
+        let lyrics: string | null | undefined = track?.lyrics;
+        let thumbnails: Thumbnail[] = track?.thumbnails ? [...track.thumbnails] : [];
+        let audio: Buffer;
 
-        let tags: any;
-
-        if (track) {
-            tags = {
-                title: track.title,
-                artist: track.artists.map(a => a.name).join(', '),
-                album: track.album?.title || '',
-                year: track.year || '',
-                userDefinedText: [
-                    { description: "duration", value: track.duration.toString() }, // do we even need this? can we not just get duration by mp3 data? or that would be toooo slow
-                ]
+        if (protocol === 'fs' || protocol === 'local') {
+            // Already a local file — just index it.
+            const file = cleanId;
+            if (!(await vfs.exists(file))) throw new Error(`Local file ${file} not found.`);
+            const record: IndexRecord = {
+                id: `local:${file}`,
+                file,
+                title,
+                artists: artists.length ? artists : [{ name: 'Unknown Artist', thumbnails: [] }],
+                album,
+                duration,
+                year,
+                lyrics: lyrics ?? null,
+                thumbnails,
             };
-        } else if (ytMetadata) {
-            newTrack.title = ytMetadata.basic_info.title || 'Untitled';
-            newTrack.artists = [{ name: ytMetadata.basic_info.author ?? ytMetadata.basic_info.channel?.name ?? "Unknown Artist", thumbnails: [] }];
-            newTrack.duration = ytMetadata.basic_info.duration ?? 0;
-            tags = {
-                title: newTrack.title,
-                artist: newTrack.artists[0].name,
-                album: null,
-                year: undefined,
-                userDefinedText: [
-                    { description: "duration", value: newTrack.duration.toString() },
-                ]
+            await metadata.upsert(record);
+            return MetadataStore.toSong(record);
+        } else if (protocol === 'yt') {
+            const info = await yt.music.getInfo(cleanId);
+            title = track?.title || info.basic_info.title || 'Untitled';
+            const author = info.basic_info.author ?? info.basic_info.channel?.name ?? 'Unknown Artist';
+            if (!artists.length) artists = [{ name: author, thumbnails: [] }];
+            duration = track?.duration || info.basic_info.duration || 0;
+            if (!thumbnails.length && info.basic_info.thumbnail?.length) {
+                thumbnails = info.basic_info.thumbnail.map((t) => ({ url: t.url, width: t.width, height: t.height }));
             }
-        } else if (jsMetadata) {
-            newTrack.title = jsMetadata.title;
-            newTrack.artists = jsMetadata.artists?.all?.splice(0, 3).map(a => ({
-                name: a.name,
-                thumbnails: a.images.map(i => ({
+            if (!lyrics) {
+                try {
+                    lyrics = (await info.getLyrics())?.description.text ?? null;
+                } catch {
+                    /* no lyrics */
+                }
+            }
+            const stream = await yt.download(cleanId, { type: 'audio', quality: 'best', client: 'ANDROID_VR' });
+            audio = await webStreamToBuffer(stream);
+        } else if (protocol === 'js') {
+            const meta = (await Saavn.getById({ songIds: cleanId })).songs?.[0];
+            title = track?.title || meta?.title || 'Untitled';
+            if (!artists.length && meta?.artists?.all) {
+                artists = meta.artists.all.slice(0, 3).map((a) => ({
+                    name: a.name,
+                    thumbnails: a.images.map((i) => ({
+                        url: i.url,
+                        width: parseInt(i.resolution.split('x')[0]),
+                        height: parseInt(i.resolution.split('x')[1]),
+                    })),
+                }));
+            }
+            duration = track?.duration || meta?.duration || 0;
+            if (!album && meta?.album) album = { title: meta.album.title || 'Untitled Album', artists: [], thumbnails: [] };
+            if (!thumbnails.length && meta?.images) {
+                thumbnails = meta.images.map((i) => ({
                     url: i.url,
                     width: parseInt(i.resolution.split('x')[0]),
                     height: parseInt(i.resolution.split('x')[1]),
-                })),
-            })) || [];
-            newTrack.duration = jsMetadata.duration ?? 0;
-            newTrack.album = jsMetadata.album ? {
-                title: jsMetadata.album.title || 'Untitled Album',
-                artists: [],
-                thumbnails: [],
-            } : null;
-        }
-
-
-        if (track?.lyrics) {
-            tags.unsynchronisedLyrics = { language: 'eng', text: track.lyrics };
-        }
-
-        try {
-            const possibleLyrics = ytMetadata ? (await ytMetadata?.getLyrics())?.description.text : jsMetadata?.lyrics?.snippet;
-            if (possibleLyrics) {
-                tags.unsynchronisedLyrics = { language: 'eng', text: possibleLyrics };
+                }));
             }
-        } catch {}
+            if (!lyrics) lyrics = meta?.lyrics?.snippet ?? null;
 
-        const firstThumb = track?.thumbnails?.at(0) ?? ytMetadata?.basic_info.thumbnail?.at(0) ?? jsMetadata?.images.at(-1);
-        if (firstThumb) {
-            if ('data' in firstThumb && firstThumb.data) {
-                tags.image = {
-                    mime: firstThumb.mimetype || 'image/jpeg',
-                    type: { id: 3, name: 'front cover' },
-                    imageBuffer: Buffer.from(firstThumb.data)
-                };
-                newTrack.thumbnails.push({
-                    mimetype: firstThumb.mimetype,
-                    data: firstThumb.data,
-                })
-            } else if (firstThumb.url) {
-                try {
-                    const res = await fetch(updateThumbnailUrl(firstThumb.url), { headers: { 'User-Agent': 'Mozilla/5.0' }, redirect: 'follow' });
-                    const data = await res.bytes();
-                    const buffer = Buffer.from(data);
+            const stream = await routes.musicStream(id, meta?.media?.encryptedUrl);
+            audio = Buffer.from(stream.data);
+        } else {
+            throw new Error('Unsupported ID protocol. Maybe you are using a wrong version.');
+        }
 
-                    tags.image = {
-                        mime: res.headers.get('Content-Type') || 'image/jpeg',
-                        type: { id: 3, name: 'front cover' },
-                        imageBuffer: buffer,
-                    }
-                    tags.userDefinedText.push({ description: 'thumbnailURL', value: updateThumbnailUrl(firstThumb.url) }); // for future use e.g. discord rpc
-                    newTrack.thumbnails.push({
-                        url: updateThumbnailUrl(firstThumb.url),
-                        mimetype: res.headers.get('Content-Type') || 'image/jpeg',
-                        data: buffer,
-                    })
-                } catch (err) { /* ignore invalid URLs */ }
+        if (!artists.length) artists = [{ name: 'Unknown Artist', thumbnails: [] }];
+
+        const file = buildFilename(title, artists[0]?.name ?? '', id);
+        await vfs.writeFile(file, audio);
+
+        // Embed native MP4 tags when we have local random access.
+        if (vfs.isLocal) {
+            const local = vfs.localPath(file);
+            if (local) {
+                const cover = await resolveCover(thumbnails);
+                await embedMp4Tags(local, {
+                    title,
+                    artists: artists.map((a) => a.name),
+                    album: album?.title,
+                    year,
+                    lyrics,
+                    cover,
+                }).catch((err) => console.warn('[metadata] tag embed failed:', err));
             }
         }
 
-        NodeID3.write(tags, mp3Path);
+        const record: IndexRecord = {
+            id,
+            file,
+            title,
+            artists,
+            album,
+            duration,
+            year,
+            lyrics: lyrics ?? null,
+            thumbnails: thumbnails.map((t) => ({ url: t.url, width: t.width, height: t.height, mimetype: t.mimetype, data: t.data })),
+        };
+        await metadata.upsert(record);
 
-        log(`  - - Metadata set! It's been nice knowing you, bye!`);
-
-        return newTrack;
+        log(`Downloaded and indexed ${id} -> ${file}`);
+        return MetadataStore.toSong(record);
     },
 
-    async musicPlaylistAddTrack(playlistId: string, track?: Song, trackId?: string): Promise<void> {
-        const song = await routes.musicDownloadSong(track, trackId);
+    async musicPlaylistAddTrack(playlistId: string, track?: Song, trackId?: string): Promise<Song> {
+        await init();
+        if (!(await vfs.exists(playlistId))) throw new Error('Playlist not found');
 
-        const playlistPath = join(musicDir, playlistId);
-        if (!existsSync(playlistPath)) throw new Error("Playlist not found");
-        
-        const lines = readFileSync(playlistPath, 'utf-8').split('\n');
-        const songLine = `./${song.id.replace('fs:', '')}`;
-        
-        if (!lines.some(l => l.trim() === songLine)) {
-            appendFileSync(playlistPath, `${songLine}\n`, 'utf-8');
+        // Adding to a playlist is the trigger to actually persist the song.
+        const song = await routes.musicDownloadSong(track, trackId);
+        const record = await metadata.get(song.id);
+
+        const content = (await vfs.readFile(playlistId)).toString('utf-8');
+        const resource = record?.file ? `./${record.file}` : song.id;
+        if (!content.split('\n').some((l) => l.trim() === resource || l.trim() === song.id)) {
+            await vfs.appendFile(playlistId, `${playlistLinesForSong(song, record)}\n`);
         }
+
+        return song;
     },
 
     async musicPlaylistRemoveTrack(playlistId: string, trackId: string): Promise<void> {
         await init();
-        const filePath = join(musicDir, playlistId);
-        if (!existsSync(filePath)) return;
+        if (!(await vfs.exists(playlistId))) return;
 
-        const playlist = readPlaylistFile(playlistId);
-        playlist.tracks = playlist.tracks.filter(t => t.id !== trackId);
+        const playlist = await readPlaylistFile(playlistId);
+        const filtered = playlist.tracks.filter((t) => t.id !== trackId);
+        await writePlaylist(playlistId, filtered, await readPlaylistMeta(playlistId));
+    },
 
-        const originalContent = readFileSync(filePath, 'utf-8');
-        const headerLine = originalContent.split('\n').find(l => l.startsWith('#EXTZETA:')) || '';
+    /* ------------------------------ settings ------------------------------ */
 
-        let content = `#EXTM3U\n${headerLine}\n`;
-        for (const t of playlist.tracks) {
-            content += `./${t.id.replace('fs:', '')}\n`;
+    async getSettings(): Promise<{ musicDir: string; isRemote: boolean }> {
+        const { musicDir } = getConfig();
+        return { musicDir, isRemote: /^(sftp|ftp|ftps):\/\//i.test(musicDir) };
+    },
+
+    /** Switch the music directory. Validates connectivity, then reloads. */
+    async setMusicDir(musicDir: string): Promise<Library> {
+        const previous = getConfig().musicDir;
+        saveConfig({ musicDir });
+        try {
+            await reloadStorage();
+            return await routes.musicLoadLibrary();
+        } catch (err) {
+            // Roll back on failure so the app isn't left pointing at a dead store.
+            saveConfig({ musicDir: previous });
+            await reloadStorage().catch(() => {});
+            throw new Error(`Could not use "${musicDir}": ${(err as Error)?.message ?? err}`);
         }
-        writeFileSync(filePath, content, 'utf-8');
-    }
+    },
+
+    /** Open a native folder picker (local directories only). Returns null if cancelled. */
+    async pickMusicDirectory(): Promise<string | null> {
+        const result = await dialog.showOpenDialog({
+            title: 'Choose a music directory',
+            properties: ['openDirectory', 'createDirectory'],
+        });
+        if (result.canceled || result.filePaths.length === 0) return null;
+        return result.filePaths[0];
+    },
+
+    /* ---------------------------- Muzza interop --------------------------- */
+
+    /**
+     * Export the whole library to a Muzza-compatible `.backup` file (a native
+     * save dialog picks the destination). Favourites map to Muzza's "liked"
+     * songs; other playlists become Muzza playlists.
+     */
+    async muzzaExport(): Promise<{ path: string; songs: number; playlists: number; liked: number } | null> {
+        await init();
+
+        const library = await routes.musicLoadLibrary();
+
+        // Collect every unique song: indexed records (downloaded + off-disk) plus
+        // whatever is referenced by playlists.
+        const songMap = new Map<string, Song>();
+        for (const record of await metadata.all()) songMap.set(record.id, MetadataStore.toSong(record));
+
+        const likedIds = new Set<string>();
+        const playlists: { name: string; createdAt: number; trackIds: string[] }[] = [];
+
+        for (const playlist of library.playlists) {
+            for (const track of playlist.tracks) if (!songMap.has(track.id)) songMap.set(track.id, track);
+
+            if (playlist.id === 'favourites.m3u8') {
+                for (const track of playlist.tracks) likedIds.add(track.id);
+            } else {
+                playlists.push({
+                    name: playlist.name,
+                    createdAt: playlist.createdAt,
+                    trackIds: playlist.tracks.map((t) => t.id),
+                });
+            }
+        }
+
+        const { data, stats } = await buildMuzzaBackup({ songs: [...songMap.values()], likedIds, playlists });
+
+        const result = await dialog.showSaveDialog({
+            title: 'Export to Muzza',
+            defaultPath: `Zeta_${backupTimestamp()}.backup`,
+            filters: [{ name: 'Muzza backup', extensions: ['backup'] }],
+        });
+        if (result.canceled || !result.filePath) return null;
+
+        writeFileSync(result.filePath, data);
+        log(`Exported Muzza backup to ${result.filePath}`, stats);
+        return { path: result.filePath, songs: stats.songs, playlists: stats.playlists, liked: stats.liked };
+    },
+
+    /**
+     * Import a Muzza `.backup` file, merging its songs, likes and playlists into
+     * the current library. Songs are added "off-disk" (metadata only) — nothing
+     * is downloaded; audio streams on demand and is only saved when the user
+     * downloads/adds it explicitly.
+     */
+    async muzzaImport(): Promise<{ songs: number; playlists: number; liked: number } | null> {
+        await init();
+
+        const picked = await dialog.showOpenDialog({
+            title: 'Import from Muzza',
+            properties: ['openFile'],
+            filters: [
+                { name: 'Muzza backup', extensions: ['backup'] },
+                { name: 'All files', extensions: ['*'] },
+            ],
+        });
+        if (picked.canceled || picked.filePaths.length === 0) return null;
+
+        const imported = await parseMuzzaBackup(readFileSync(picked.filePaths[0]));
+
+        // 1. Merge song metadata (never clobber an already-downloaded record).
+        const toAdd: IndexRecord[] = [];
+        for (const song of imported.songs) {
+            const existing = await metadata.get(song.zetaId);
+            if (existing?.file) continue;
+            toAdd.push(song.record);
+        }
+        await metadata.upsertMany(toAdd);
+
+        // 2. Merge favourites (liked songs).
+        if (!(await vfs.exists('favourites.m3u8'))) {
+            await vfs.writeFile(
+                'favourites.m3u8',
+                playlistHeader({ name: 'Favourites', isProtected: true, thumbnail: '' }),
+            );
+        }
+        const favMeta = await readPlaylistMeta('favourites.m3u8');
+        const favTracks = (await readPlaylistFile('favourites.m3u8')).tracks;
+        const favIds = new Set(favTracks.map((t) => t.id));
+        for (const zetaId of imported.likedIds) {
+            if (favIds.has(zetaId)) continue;
+            const record = await metadata.get(zetaId);
+            if (record) {
+                favTracks.push(MetadataStore.toSong(record));
+                favIds.add(zetaId);
+            }
+        }
+        await writePlaylist('favourites.m3u8', favTracks, favMeta);
+
+        // 3. Recreate playlists.
+        for (const playlist of imported.playlists) {
+            const created = await routes.musicPlaylistCreate(playlist.name);
+            const tracks: Song[] = [];
+            for (const zetaId of playlist.trackIds) {
+                const record = await metadata.get(zetaId);
+                if (record) tracks.push(MetadataStore.toSong(record));
+            }
+            await writePlaylist(created.id, tracks, await readPlaylistMeta(created.id));
+        }
+
+        log('Imported Muzza backup', {
+            songs: toAdd.length,
+            playlists: imported.playlists.length,
+            liked: imported.likedIds.length,
+        });
+        return { songs: toAdd.length, playlists: imported.playlists.length, liked: imported.likedIds.length };
+    },
+};
+
+function backupTimestamp(): string {
+    const d = new Date();
+    const p = (n: number) => n.toString().padStart(2, '0');
+    return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
