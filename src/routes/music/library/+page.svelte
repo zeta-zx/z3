@@ -227,6 +227,11 @@
                         <strong>{track.title}</strong>
                         <small>{track.artists.map((a) => a.name).join(", ")}</small>
                     </div>
+                    {#if track.isDownloaded}
+                        <span class="downloaded-badge" title="Downloaded to disk">
+                            <Icon name="arrow-big-down-dash" /> Downloaded
+                        </span>
+                    {/if}
                     <div class="track-action-row">
                         {#if playerState.currentTrack?.id === track.id}
                             <button class="primary" onclick={() => (playerState.paused = !playerState.paused)}>
@@ -289,6 +294,24 @@
     .track-row.drag-over {
         outline: 2px dashed var(--pico-primary, #7aa2f7);
         outline-offset: -2px;
+    }
+    .downloaded-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        flex-shrink: 0;
+        margin-right: 0.5rem;
+        padding: 0.1rem 0.45rem;
+        border-radius: 999px;
+        font-size: 0.7rem;
+        white-space: nowrap;
+        color: var(--pico-ins-color, #2a9d8f);
+        border: 1px solid color-mix(in srgb, var(--pico-ins-color, #2a9d8f) 45%, transparent);
+        background: color-mix(in srgb, var(--pico-ins-color, #2a9d8f) 12%, transparent);
+    }
+    .downloaded-badge :global(svg) {
+        width: 0.85em;
+        height: 0.85em;
     }
     .modal-backdrop {
         position: fixed;

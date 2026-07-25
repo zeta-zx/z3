@@ -15,19 +15,28 @@
         return embedded.length ? embedded : playerState.lyrics;
     });
 
+    // Reset the scroller whenever the track changes so we never show a stale
+    // line left over from the previous song.
+    $effect(() => {
+        playerState.currentTrack?.id;
+        currentLyricIndex = -1;
+        lyricsTextCurrent = '♪';
+        lyricsTextNext = '';
+        currentPos = 'lyric-center';
+        nextPos = 'lyric-down';
+        transitionStyle = 'none';
+    });
+
     $effect(() => {
         if (playerState.isLoading) {
             lyricsTextCurrent = 'Loading song...';
+            lyricsTextNext = '';
             return;
         }
 
-        if (currentLyricIndex < 0) {
-            lyricsTextCurrent = '♪';
-            // return;
-        }
-
-        if (!lyrics) {
-            lyricsTextCurrent = "♪ (Lyrics not available)";
+        if (!lyrics.length) {
+            lyricsTextCurrent = '♪ (No lyrics available)';
+            lyricsTextNext = '';
             return;
         }
 

@@ -21,6 +21,8 @@ export interface Song {
 export interface Stream {
     data: Uint8Array;
     mimetype: string;
+    /** True when the bytes are backed by a file on disk (served or just saved). */
+    savedToDisk?: boolean;
 }
 
 export interface Thumbnail {

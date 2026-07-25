@@ -15,6 +15,14 @@ export default defineConfig({
                     plugins: [
                         notBundle(),
                     ],
+                    build: {
+                        rollupOptions: {
+                            // node:sqlite isn't in the bundler's builtin list yet;
+                            // keep it external so it resolves at runtime instead of
+                            // being stubbed as a browser-external module.
+                            external: ['node:sqlite'],
+                        },
+                    },
                 },
             },
             preload: {

@@ -151,6 +151,15 @@ class LibraryStore {
         const idx = this.playlists.findIndex(p => p.id === updated.id);
         if (idx !== -1) this.playlists[idx] = updated;
     }
+
+    /** Mark a track as downloaded across all playlists (called after it's saved to disk). */
+    markDownloaded(trackId: string) {
+        for (const playlist of this.playlists) {
+            for (const track of playlist.tracks) {
+                if (track.id === trackId && !track.isDownloaded) track.isDownloaded = true;
+            }
+        }
+    }
 }
 
 export const libraryState = new LibraryStore();

@@ -3,15 +3,85 @@
     import Icon from "$lib/components/Icon.svelte";
     import MusicPlayer from "$lib/components/MusicPlayer.svelte";
     import MiniMusicPlayer from "$lib/components/MiniMusicPlayer.svelte";
-    import { previousTrack, nextTrack, playerState, cache, loadTrack, resetState, applyCache } from "$lib/state/player.svelte";
+    import { previousTrack, nextTrack, playerState, cache, loadTrack, resetState, applyCache, isNextTrackAvailable } from "$lib/state/player.svelte";
     import { page } from "$app/state";
     import { fade } from "svelte/transition";
-    import { untrack } from "svelte";
+    import { untrack, onDestroy } from "svelte";
     import { updateThumbnailUrl } from "$lib/utils";
+    import { toasts } from "$lib/state/toast.svelte";
+    import type { Song } from "$lib/schema";
 
     let { children } = $props();
 
     let audioElement = $state<HTMLAudioElement>();
+
+    // --- listening stats: accumulate actual played time and report a listen
+    //     event whenever we leave a track (or it ends). ---
+    let statsTrack: Song | null = null;
+    let playedMs = 0;
+    let lastTime = 0;
+
+    function flushListen() {
+        const track = statsTrack;
+        if (track && playedMs >= 1000) {
+            client
+                .statsRecordEvent(track.id, Math.round(playedMs), Date.now() - Math.round(playedMs), {
+                    title: track.title,
+                    artists: track.artists.map((a) => a.name),
+                    thumbnailUrl: track.thumbnails.find((t) => t.url)?.url,
+                })
+                .catch(() => {});
+        }
+        playedMs = 0;
+        lastTime = 0;
+    }
+
+    function accumulatePlaytime() {
+        if (!audioElement) return;
+        const t = audioElement.currentTime;
+        const dt = t - lastTime;
+        // Ignore seeks (large jumps) and paused gaps.
+        if (dt > 0 && dt < 2 && !playerState.paused) playedMs += dt * 1000;
+        lastTime = t;
+    }
+
+    // Flush the outgoing track's listen when the current track changes.
+    $effect(() => {
+        const track = playerState.currentTrack;
+        if (track?.id !== statsTrack?.id) {
+            untrack(() => flushListen());
+            statsTrack = track;
+        }
+    });
+
+    onDestroy(() => flushListen());
+
+    // Consecutive playback failures, to avoid skipping forever through a broken
+    // playlist. Reset on any successful load.
+    let failCount = 0;
+
+    function handlePlaybackFailure(track: Song, err: unknown) {
+        if (playerState.currentTrack?.id !== track.id) return;
+
+        playerState.stream = null;
+        playerState.isLoading = false;
+        playerState.paused = true;
+
+        const msg = (err as any)?.message ?? String(err);
+
+        // If we're in a playlist, show the error and skip to the next track so
+        // playback keeps going — unless we've already skipped through the whole
+        // playlist (everything is broken).
+        const playlist = playerState.currentPlaylist;
+        if (playlist && isNextTrackAvailable() && failCount < playlist.tracks.length) {
+            failCount++;
+            toasts.error(`Skipping "${track.title}": ${msg}`);
+            nextTrack();
+        } else {
+            failCount = 0;
+            toasts.error(`Couldn't play "${track.title}": ${msg}`);
+        }
+    }
 
     $effect(() => {
         if (playerState.stream && audioElement)
@@ -32,24 +102,26 @@
 
         resetState();
 
-        if (cache.has(track.id)) applyCache(cache.get(track.id));
-        else {
+        if (cache.has(track.id)) {
+            applyCache(cache.get(track.id));
+            failCount = 0;
+        } else {
             loadTrack(track)
                 .then(() => {
-                    if (playerState.currentTrack?.id === loadingId)
-                        applyCache(cache.get(loadingId)!);
+                    if (playerState.currentTrack?.id === loadingId) {
+                        applyCache(cache.get(loadingId));
+                        failCount = 0;
+                    }
                 })
-                .catch(console.error)
-                .finally(() => {
-                    if (playerState.currentTrack?.id === loadingId)
-                        applyCache(cache.get(loadingId)!);
-                });
+                .catch((err) => handlePlaybackFailure(track, err));
         }
     });
 
     $effect(() => {
         if (playerState._upcomingTrack) {
-            loadTrack(playerState._upcomingTrack); // preload in background so that its ready for playback
+            // Preload in the background; ignore failures here (they'll be shown
+            // if/when the track actually becomes the current one).
+            loadTrack(playerState._upcomingTrack).catch(() => {});
         }
     });
 
@@ -157,6 +229,14 @@
 				</li>
 				<li>
 					<a
+						href="/music/stats"
+						aria-current={page.url.pathname === '/music/stats' ? 'page' : undefined}
+					>
+						<Icon name="chart-no-axes-column" /> Stats
+					</a>
+				</li>
+				<li>
+					<a
 						href="/music/settings"
 						aria-current={page.url.pathname === '/music/settings' ? 'page' : undefined}
 					>
@@ -209,11 +289,19 @@
         bind:duration={playerState.duration}
         autoplay
         onended={() => {
+            flushListen();
             playerState.paused = true;
             nextTrack();
         }}
+        ontimeupdate={accumulatePlaytime}
         onplay={updatePositionState}
         onseeked={updatePositionState}
+        onerror={() => {
+            // Decode/playback failure on a loaded stream: surface it and, in a
+            // playlist, skip onward instead of stalling.
+            if (playerState.stream && playerState.currentTrack)
+                handlePlaybackFailure(playerState.currentTrack, new Error("This track could not be played."));
+        }}
         src={playerState.stream ? URL.createObjectURL(new Blob([new Uint8Array(playerState.stream.data)], { type: playerState.stream.mimetype })) : null}
     ></audio>
 

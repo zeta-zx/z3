@@ -20,6 +20,7 @@
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createRequire } from 'node:module';
 
 import type { Song, Artist, Thumbnail, AlbumBase } from '../../src/lib/schema';
 import type { IndexRecord } from './metadata';
@@ -32,6 +33,7 @@ export const MUZZA_DB_VERSION = 24;
 const MUZZA_IDENTITY_HASH = '7c3fb9fe3ffbe91bb0608071ac412db7';
 const DB_ENTRY = 'song.db';
 const METADATA_ENTRY = 'metadata.txt';
+const SETTINGS_ENTRY = 'settings.preferences_pb';
 
 // Exact CREATE statements taken from Muzza's exported Room schema (24.json).
 // These must match byte-for-byte so Room accepts the file without migration.
@@ -77,9 +79,15 @@ const SPECIAL_PLAYLIST_IDS = new Set(['LP_LIKED', 'LP_DOWNLOADED']);
 /*                                   helpers                                  */
 /* -------------------------------------------------------------------------- */
 
-async function openSqlite() {
-    // node:sqlite is built into Electron 42's Node runtime.
-    return (await import('node:sqlite')) as any;
+// Load node:sqlite via a runtime require rather than a static/dynamic import.
+// `node:sqlite` is new enough that the bundler doesn't recognise it as a Node
+// builtin and would otherwise stub it out as a browser-external module (making
+// `DatabaseSync` undefined). createRequire resolves it against the real Node
+// runtime at call time, bypassing the bundler entirely.
+const nodeRequire = createRequire(import.meta.url);
+function openSqlite() {
+    // node:sqlite is built into Electron's Node runtime.
+    return nodeRequire('node:sqlite') as any;
 }
 
 const ALPHABET = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -111,6 +119,12 @@ function toZetaId(muzzaId: string, isLocal: boolean): string {
 /*                                   export                                   */
 /* -------------------------------------------------------------------------- */
 
+export interface MuzzaEvent {
+    zetaId: string;
+    timestamp: number; // epoch ms
+    playTimeMs: number;
+}
+
 export interface MuzzaExportInput {
     /** Every unique song to include in the backup. */
     songs: Song[];
@@ -118,6 +132,15 @@ export interface MuzzaExportInput {
     likedIds: Set<string>;
     /** User playlists (favourites excluded — that maps to `liked`). */
     playlists: { name: string; createdAt: number; trackIds: string[] }[];
+    /** Play events recorded in Zeta since the last import (for stats/history). */
+    events?: MuzzaEvent[];
+    /**
+     * A previously-imported Muzza database to build upon. When present, ALL of
+     * its non-library data (settings, event history, search history, formats,
+     * lyrics, recent activity, …) is preserved; only the library structure
+     * (songs, liked flags, playlists) is overlaid with Zeta's current state.
+     */
+    base?: { db: Buffer; settings?: Buffer | null } | null;
 }
 
 export interface MuzzaExportStats {
@@ -137,42 +160,45 @@ export async function buildMuzzaBackup(
     const dbPath = join(tmp, 'song.db');
 
     try {
+        const fromBase = !!input.base?.db;
+        if (fromBase) writeFileSync(dbPath, input.base!.db);
+
         const db = new DatabaseSync(dbPath);
         try {
             db.exec('PRAGMA journal_mode = DELETE');
-            for (const sql of SCHEMA_SQL) db.exec(sql);
+            db.exec('PRAGMA foreign_keys = OFF');
 
-            // Room identity + version bookkeeping.
-            db.exec('CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY, identity_hash TEXT)');
-            db.prepare('INSERT OR REPLACE INTO room_master_table (id, identity_hash) VALUES (42, ?)').run(
-                MUZZA_IDENTITY_HASH,
-            );
-            // android_metadata exists in real Android DBs; harmless, aids realism.
-            db.exec('CREATE TABLE IF NOT EXISTS android_metadata (locale TEXT)');
-            db.prepare('INSERT INTO android_metadata (locale) VALUES (?)').run('en_US');
+            if (!fromBase) {
+                for (const sql of SCHEMA_SQL) db.exec(sql);
+                // Room identity + version bookkeeping (already present in a base DB).
+                db.exec('CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY, identity_hash TEXT)');
+                db.prepare('INSERT OR REPLACE INTO room_master_table (id, identity_hash) VALUES (42, ?)').run(
+                    MUZZA_IDENTITY_HASH,
+                );
+                db.exec('CREATE TABLE IF NOT EXISTS android_metadata (locale TEXT)');
+                db.prepare('INSERT INTO android_metadata (locale) VALUES (?)').run('en_US');
+            }
 
             const now = Date.now();
 
+            const songExists = db.prepare('SELECT 1 AS x FROM song WHERE id = ?');
             const insertSong = db.prepare(
-                'INSERT OR REPLACE INTO song (id, title, duration, thumbnailUrl, albumId, albumName, liked, totalPlayTime, inLibrary, dateDownload, artistName, isLocal, localPath, contentUri, isVideoSong, explicit) ' +
+                'INSERT OR IGNORE INTO song (id, title, duration, thumbnailUrl, albumId, albumName, liked, totalPlayTime, inLibrary, dateDownload, artistName, isLocal, localPath, contentUri, isVideoSong, explicit) ' +
                     'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             );
+            const updateLiked = db.prepare('UPDATE song SET liked = ? WHERE id = ?');
+            const findArtist = db.prepare('SELECT id AS id FROM artist WHERE name = ? LIMIT 1');
             const insertArtist = db.prepare(
                 'INSERT OR REPLACE INTO artist (id, name, thumbnailUrl, channelId, lastUpdateTime, bookmarkedAt, isProfile) VALUES (?, ?, ?, ?, ?, ?, ?)',
             );
             const insertSongArtist = db.prepare(
-                'INSERT OR REPLACE INTO song_artist_map (songId, artistId, position) VALUES (?, ?, ?)',
+                'INSERT OR IGNORE INTO song_artist_map (songId, artistId, position) VALUES (?, ?, ?)',
             );
-            const insertPlaylist = db.prepare(
-                'INSERT OR REPLACE INTO playlist (id, name, browseId, playlistAuthorsId, playlistAuthorName, playlistAuthorAvatarUrl, createdAt, lastUpdateTime, isEditable, bookmarkedAt, remoteSongCount, playEndpointParams, thumbnailUrl, shuffleEndpointParams, radioEndpointParams, description, isLocal) ' +
-                    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            );
-            const insertPlaylistSong = db.prepare(
-                'INSERT INTO playlist_song_map (playlistId, songId, position, setVideoId) VALUES (?, ?, ?, ?)',
+            const insertLyrics = db.prepare(
+                "INSERT OR REPLACE INTO lyrics (id, lyrics, provider) VALUES (?, ?, 'Zeta')",
             );
 
             const artistIds = new Map<string, string>(); // name -> LA id
-            let songCount = 0;
             let likedCount = 0;
 
             for (const song of input.songs) {
@@ -181,69 +207,94 @@ export async function buildMuzzaBackup(
                 const liked = input.likedIds.has(song.id) ? 1 : 0;
                 if (liked) likedCount++;
 
-                insertSong.run(
-                    muzzaId,
-                    song.title || 'Untitled',
-                    Math.max(0, Math.round(song.duration || 0)),
-                    bestThumbnailUrl(song.thumbnails),
-                    null,
-                    song.album?.title ?? null,
-                    liked,
-                    0,
-                    now, // inLibrary
-                    song.isDownloaded ? now : null,
-                    song.artists.map((a) => a.name).join(', ') || null,
-                    isLocal,
-                    null,
-                    null,
-                    0,
-                    0,
-                );
-                songCount++;
+                if (song.lyrics) insertLyrics.run(muzzaId, song.lyrics);
 
-                song.artists.forEach((artist, position) => {
-                    const key = artist.name.trim().toLowerCase();
-                    if (!key) return;
-                    let artistId = artistIds.get(key);
-                    if (!artistId) {
-                        artistId = randomId('LA');
-                        artistIds.set(key, artistId);
-                        insertArtist.run(artistId, artist.name, bestThumbnailUrl(artist.thumbnails), null, now, null, 0);
-                    }
-                    insertSongArtist.run(muzzaId, artistId, position);
-                });
+                // Only insert songs missing from the (base) DB — this preserves the
+                // stats/history of songs Muzza already knew about.
+                if (!songExists.get(muzzaId)) {
+                    insertSong.run(
+                        muzzaId,
+                        song.title || 'Untitled',
+                        Math.max(0, Math.round(song.duration || 0)),
+                        bestThumbnailUrl(song.thumbnails),
+                        null,
+                        song.album?.title ?? null,
+                        liked,
+                        0,
+                        now, // inLibrary
+                        song.isDownloaded ? now : null,
+                        song.artists.map((a) => a.name).join(', ') || null,
+                        isLocal,
+                        null,
+                        null,
+                        0,
+                        0,
+                    );
+
+                    song.artists.forEach((artist, position) => {
+                        const key = artist.name.trim().toLowerCase();
+                        if (!key) return;
+                        let artistId = artistIds.get(key);
+                        if (!artistId) {
+                            const found = findArtist.get(artist.name) as { id: string } | undefined;
+                            artistId = found?.id ?? randomId('LA');
+                            artistIds.set(key, artistId);
+                            if (!found)
+                                insertArtist.run(artistId, artist.name, bestThumbnailUrl(artist.thumbnails), null, now, null, 0);
+                        }
+                        insertSongArtist.run(muzzaId, artistId, position);
+                    });
+                }
+
+                // Liked state is authoritative from Zeta for songs it manages.
+                updateLiked.run(liked, muzzaId);
             }
+
+            // Rebuild playlists entirely from Zeta (authoritative for structure).
+            db.exec('DELETE FROM playlist_song_map');
+            db.exec('DELETE FROM playlist');
+            const insertPlaylist = db.prepare(
+                'INSERT INTO playlist (id, name, browseId, playlistAuthorsId, playlistAuthorName, playlistAuthorAvatarUrl, createdAt, lastUpdateTime, isEditable, bookmarkedAt, remoteSongCount, playEndpointParams, thumbnailUrl, shuffleEndpointParams, radioEndpointParams, description, isLocal) ' +
+                    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            );
+            const insertPlaylistSong = db.prepare(
+                'INSERT INTO playlist_song_map (playlistId, songId, position, setVideoId) VALUES (?, ?, ?, ?)',
+            );
 
             let playlistCount = 0;
             for (const playlist of input.playlists) {
                 const playlistId = randomId('LP');
-                const created = playlist.createdAt || now;
                 insertPlaylist.run(
                     playlistId,
                     playlist.name,
-                    null,
-                    null,
-                    null,
-                    null,
-                    created,
+                    null, null, null, null,
+                    playlist.createdAt || now,
                     now,
                     1, // isEditable
                     now, // bookmarkedAt -> shows in Muzza library
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
+                    null, null, null, null, null, null,
                     0,
                 );
                 playlist.trackIds.forEach((zetaId, position) => {
-                    insertPlaylistSong.run(playlistId, toMuzzaId(zetaId), position, null);
+                    if (songExists.get(toMuzzaId(zetaId))) {
+                        insertPlaylistSong.run(playlistId, toMuzzaId(zetaId), position, null);
+                    }
                 });
                 playlistCount++;
             }
 
-            db.exec(`PRAGMA user_version = ${MUZZA_DB_VERSION}`);
+            // Append Zeta's play events to the history, then recompute play totals.
+            const insertEvent = db.prepare('INSERT INTO event (songId, timestamp, playTime) VALUES (?, ?, ?)');
+            for (const ev of input.events ?? []) {
+                const muzzaId = toMuzzaId(ev.zetaId);
+                if (!songExists.get(muzzaId)) continue;
+                insertEvent.run(muzzaId, Math.round(ev.timestamp), Math.max(0, Math.round(ev.playTimeMs)));
+            }
+            db.exec(
+                'UPDATE song SET totalPlayTime = COALESCE((SELECT SUM(playTime) FROM event WHERE event.songId = song.id), 0)',
+            );
+
+            if (!fromBase) db.exec(`PRAGMA user_version = ${MUZZA_DB_VERSION}`);
             db.close();
 
             const dbBytes = readFileSync(dbPath);
@@ -252,6 +303,8 @@ export async function buildMuzzaBackup(
             const zip = new JSZip();
             zip.file(DB_ENTRY, dbBytes);
             zip.file(METADATA_ENTRY, `db_version=${MUZZA_DB_VERSION}\n`);
+            // Preserve Muzza's settings blob verbatim when we have one.
+            if (input.base?.settings) zip.file(SETTINGS_ENTRY, input.base.settings);
             const data = await zip.generateAsync({
                 type: 'nodebuffer',
                 compression: 'DEFLATE',
@@ -260,7 +313,7 @@ export async function buildMuzzaBackup(
 
             return {
                 data,
-                stats: { songs: songCount, playlists: playlistCount, liked: likedCount, bytes: data.length },
+                stats: { songs: input.songs.length, playlists: playlistCount, liked: likedCount, bytes: data.length },
             };
         } catch (err) {
             try {
@@ -295,6 +348,11 @@ export interface MuzzaImport {
     songs: ImportedSong[];
     playlists: ImportedPlaylist[];
     likedIds: string[];
+    events: MuzzaEvent[];
+    /** Raw `song.db` bytes, kept so a later export can preserve everything. */
+    db: Buffer;
+    /** Raw `settings.preferences_pb` bytes, if the backup carried settings. */
+    settings: Buffer | null;
 }
 
 /** Parse a Muzza `.backup` archive into Zeta-shaped data (no side effects). */
@@ -305,6 +363,9 @@ export async function parseMuzzaBackup(backupBytes: Buffer): Promise<MuzzaImport
     const dbFile = zip.file(DB_ENTRY);
     if (!dbFile) throw new Error('Not a valid Muzza backup: song.db entry is missing.');
     const dbBytes = await dbFile.async('nodebuffer');
+
+    const settingsFile = zip.file(SETTINGS_ENTRY);
+    const settings = settingsFile ? await settingsFile.async('nodebuffer') : null;
 
     const { DatabaseSync } = await openSqlite();
     const tmp = mkdtempSync(join(tmpdir(), 'zeta-muzza-'));
@@ -330,6 +391,16 @@ export async function parseMuzzaBackup(backupBytes: Buffer): Promise<MuzzaImport
                     thumbnails: row.thumbnailUrl ? [{ url: row.thumbnailUrl }] : [],
                 });
                 artistsBySong.set(row.songId, list);
+            }
+
+            // Stored lyrics (may be synced LRC or plain), keyed by song id.
+            const lyricsById = new Map<string, string>();
+            try {
+                for (const r of db.prepare('SELECT id, lyrics FROM lyrics').all() as any[]) {
+                    if (r.lyrics && r.lyrics !== 'LYRICS_NOT_FOUND') lyricsById.set(r.id, r.lyrics);
+                }
+            } catch {
+                /* lyrics table absent or unreadable */
             }
 
             const songRows = db
@@ -368,7 +439,7 @@ export async function parseMuzzaBackup(backupBytes: Buffer): Promise<MuzzaImport
                     thumbnails,
                     artists: artists.length ? artists : [{ name: 'Unknown Artist', thumbnails: [] }],
                     album,
-                    lyrics: null,
+                    lyrics: lyricsById.get(row.id) ?? null,
                 };
 
                 const liked = !!row.liked;
@@ -394,8 +465,17 @@ export async function parseMuzzaBackup(backupBytes: Buffer): Promise<MuzzaImport
                 });
             }
 
+            // Play history / stats.
+            const eventRows = db.prepare('SELECT songId, timestamp, playTime FROM event').all() as any[];
+            const events: MuzzaEvent[] = eventRows
+                .map((e) => {
+                    const zetaId = zetaIdByMuzzaId.get(e.songId);
+                    return zetaId ? { zetaId, timestamp: Number(e.timestamp), playTimeMs: Number(e.playTime) } : null;
+                })
+                .filter((e): e is MuzzaEvent => !!e);
+
             db.close();
-            return { songs, playlists, likedIds };
+            return { songs, playlists, likedIds, events, db: dbBytes, settings };
         } catch (err) {
             try {
                 db.close();
@@ -403,6 +483,36 @@ export async function parseMuzzaBackup(backupBytes: Buffer): Promise<MuzzaImport
                 /* ignore */
             }
             throw err;
+        }
+    } finally {
+        rmSync(tmp, { recursive: true, force: true });
+    }
+}
+
+/**
+ * Read just the play-history events out of a raw Muzza `song.db`, mapped to Zeta
+ * ids. Used by the stats page to combine Muzza's history with Zeta's own.
+ */
+export async function readMuzzaEventsFromDb(dbBytes: Buffer): Promise<MuzzaEvent[]> {
+    const { DatabaseSync } = await openSqlite();
+    const tmp = mkdtempSync(join(tmpdir(), 'zeta-muzza-'));
+    const dbPath = join(tmp, 'song.db');
+    try {
+        writeFileSync(dbPath, dbBytes);
+        const db = new DatabaseSync(dbPath, { readOnly: true });
+        try {
+            const localById = new Map<string, boolean>();
+            for (const r of db.prepare('SELECT id, isLocal FROM song').all() as any[]) {
+                localById.set(r.id, !!r.isLocal);
+            }
+            const rows = db.prepare('SELECT songId, timestamp, playTime FROM event').all() as any[];
+            return rows.map((e) => ({
+                zetaId: toZetaId(e.songId, localById.get(e.songId) ?? false),
+                timestamp: Number(e.timestamp),
+                playTimeMs: Number(e.playTime),
+            }));
+        } finally {
+            db.close();
         }
     } finally {
         rmSync(tmp, { recursive: true, force: true });

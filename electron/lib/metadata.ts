@@ -22,12 +22,20 @@
  * lines (fragile, duplicated across playlists). The central index won out.
  */
 
+import { encode, decode } from '@msgpack/msgpack';
+
 import type { Song, Thumbnail, Artist, AlbumBase } from '../../src/lib/schema';
 import type { VFS } from './vfs';
 
-const INDEX_PATH = '.zeta/index.json';
 const INDEX_DIR = '.zeta';
-const INDEX_VERSION = 1;
+// The index is stored as MessagePack: it keeps raw thumbnail bytes as native
+// binary (no base64 bloat), parses faster, and — crucially — isn't subject to
+// JSON.stringify's ~512MB single-string limit, which a large migrated library
+// of embedded cover art can blow past.
+const INDEX_PATH = '.zeta/index.msgpack';
+// Pre-msgpack JSON index (base64 thumbnails). Read once, then superseded.
+const LEGACY_JSON_PATH = '.zeta/index.json';
+const INDEX_VERSION = 2;
 
 export interface IndexRecord {
     id: string; // canonical id: yt:.. / js:.. / local:..
@@ -52,20 +60,10 @@ interface IndexFile {
     records: Record<string, IndexRecord>;
 }
 
-/* --------------------------- (de)serialisation ---------------------------- */
+/* --------------------------- legacy JSON support -------------------------- */
 
-// JSON cannot represent Uint8Array, so raw thumbnail bytes are base64-encoded
-// on write and rehydrated on read.
-function serialiseThumbnails(thumbs: Thumbnail[]): any[] {
-    return (thumbs || []).map((t) => ({
-        url: t.url,
-        mimetype: t.mimetype,
-        width: t.width,
-        height: t.height,
-        data: t.data ? Buffer.from(t.data).toString('base64') : undefined,
-    }));
-}
-
+// The old JSON index base64-encoded thumbnail bytes; rehydrate them on read so
+// existing libraries migrate seamlessly to msgpack on the next write.
 function deserialiseThumbnails(raw: any[]): Thumbnail[] {
     return (raw || []).map((t) => ({
         url: t.url,
@@ -92,15 +90,30 @@ export class MetadataStore {
     private async load(): Promise<IndexFile> {
         if (this.cache) return this.cache;
 
+        // Preferred: MessagePack index.
         if (await this.vfs.exists(INDEX_PATH)) {
             try {
-                const parsed = JSON.parse((await this.vfs.readFile(INDEX_PATH)).toString('utf-8'));
+                const decoded = decode(await this.vfs.readFile(INDEX_PATH)) as any;
+                this.cache = {
+                    version: decoded?.version || INDEX_VERSION,
+                    records: decoded?.records || {},
+                };
+                return this.cache;
+            } catch (err) {
+                console.warn('[metadata] Corrupt index.msgpack, starting fresh:', err);
+            }
+        }
+
+        // Fallback: migrate a legacy JSON index (base64 thumbnails) if present.
+        if (await this.vfs.exists(LEGACY_JSON_PATH)) {
+            try {
+                const parsed = JSON.parse((await this.vfs.readFile(LEGACY_JSON_PATH)).toString('utf-8'));
                 const records: Record<string, IndexRecord> = {};
                 for (const [id, rec] of Object.entries(parsed.records || {})) {
                     const r = rec as any;
                     records[id] = { ...r, thumbnails: deserialiseThumbnails(r.thumbnails) };
                 }
-                this.cache = { version: parsed.version || INDEX_VERSION, records };
+                this.cache = { version: INDEX_VERSION, records };
                 return this.cache;
             } catch (err) {
                 console.warn('[metadata] Corrupt index.json, starting fresh:', err);
@@ -114,16 +127,18 @@ export class MetadataStore {
     private async persist(): Promise<void> {
         if (!this.cache) return;
         await this.vfs.mkdir(INDEX_DIR);
-        const out = {
-            version: this.cache.version,
-            records: Object.fromEntries(
-                Object.entries(this.cache.records).map(([id, r]) => [
-                    id,
-                    { ...r, thumbnails: serialiseThumbnails(r.thumbnails) },
-                ]),
-            ),
-        };
-        await this.vfs.writeFile(INDEX_PATH, JSON.stringify(out, null, 2));
+        // msgpack encodes Uint8Array thumbnail data natively; ignoreUndefined
+        // keeps optional fields out of the payload.
+        const encoded = encode(this.cache, { ignoreUndefined: true });
+        // encode() returns a view into a larger ArrayBuffer; respect its bounds.
+        await this.vfs.writeFile(INDEX_PATH, Buffer.from(encoded.buffer, encoded.byteOffset, encoded.byteLength));
+
+        // Retire the old JSON index once we've written the msgpack one.
+        try {
+            if (await this.vfs.exists(LEGACY_JSON_PATH)) await this.vfs.unlink(LEGACY_JSON_PATH);
+        } catch {
+            /* best-effort cleanup */
+        }
     }
 
     async get(id: string): Promise<IndexRecord | undefined> {
@@ -225,10 +240,12 @@ export async function embedMp4Tags(
 }
 
 /**
- * Read metadata from a local MP4 file that isn't in the index (e.g. a file the
- * user dropped into the music dir manually). Returns null if it can't be read.
+ * Read metadata from a local audio file that isn't in the index (e.g. a file
+ * the user dropped in, or a pre-rewrite `.mp3`). TagLib auto-detects the format
+ * from the file, so this handles MP4/M4A, MP3 (ID3), FLAC, Ogg, etc. Returns
+ * null if it can't be read.
  */
-export async function readMp4Tags(
+export async function readAudioTags(
     localPath: string,
 ): Promise<Pick<IndexRecord, 'title' | 'artists' | 'album' | 'duration' | 'year' | 'lyrics' | 'thumbnails'> | null> {
     try {

@@ -1,6 +1,7 @@
 import { client } from "$lib/ephaptic";
 import type { Stream, Song, Playlist } from "$lib/schema";
 import { shuffle, type LrcLine, parseLrc } from "$lib/utils";
+import { libraryState } from "$lib/state/library.svelte";
 
 export interface CacheRecord {
     stream: Stream,
@@ -163,16 +164,22 @@ export function previousTrack() {
 export async function loadTrack(track: Song | null) {
     if (!track || cache.has(track.id)) return;
 
-    try {
-        const [lyrics, stream] = await Promise.all([
-            client.musicLyrics(track).catch(() => null),
-            client.musicStream(track.id),
-        ]);
+    // If the track already carries synced lyrics (e.g. imported from Muzza),
+    // use them and skip the network lookup.
+    const embedded = track.lyrics ?? null;
+    const hasSynced = parseLrc(embedded ?? '').length > 0;
 
-        cache.set(track.id, { lyrics: parseLrc(lyrics), stream });
-    } catch (e) {
-        console.error("Loading track failed.", e);
-    }
+    // Lyrics are optional; a failure there must not block playback. A stream
+    // failure, however, propagates so callers can surface it to the user.
+    const [lyrics, stream] = await Promise.all([
+        hasSynced ? Promise.resolve(embedded) : client.musicLyrics(track).catch(() => null),
+        client.musicStream(track.id),
+    ]);
+
+    // If fetching this track also saved it to disk, reflect that in the library.
+    if (stream.savedToDisk) libraryState.markDownloaded(track.id);
+
+    cache.set(track.id, { lyrics: parseLrc(lyrics), stream });
 }
 
 export function resetState() {
