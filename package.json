@@ -7,6 +7,7 @@
 	"description": "z3 is an Electron app that allows you to listen to your playlist and **own** your music.",
 	"build": {
 		"appId": "com.zeta.z3",
+		"npmRebuild": false,
 		"productName": "Zeta",
 		"directories": {
 			"output": "dist-release"
@@ -14,7 +15,9 @@
 		"files": [
 			"dist-electron/**/*",
 			"build/**/*",
-			"package.json"
+			"package.json",
+			"!node_modules/cpu-features/**",
+			"!node_modules/ssh2/lib/protocol/crypto/build/**"
 		],
 		"win": {
 			"target": [
