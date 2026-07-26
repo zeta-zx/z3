@@ -8,8 +8,17 @@ const { autoUpdater } = updater;
 import { exposeIPC } from '@ephaptic/server/electron';
 
 import { routes } from './routes';
+import { initMpris, shutdownMpris, type MprisCommand } from './lib/mpris';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// On Linux we publish our own org.mpris.MediaPlayer2.zeta service (see
+// lib/mpris.ts), so Chromium's MediaSession -> MPRIS bridge must be suppressed
+// or the desktop would list Zeta twice. Windows and macOS are left alone: they
+// have no MPRIS and Chromium's bridge is what drives SMTC / Now Playing there.
+if (process.platform === 'linux') {
+	app.commandLine.appendSwitch('disable-features', 'MediaSessionService,HardwareMediaKeyHandling');
+}
 
 protocol.registerSchemesAsPrivileged([
 	{ scheme: 'zeta-app', privileges: { standard: true, secure: true, supportFetchAPI: true } }
@@ -62,12 +71,28 @@ app.whenReady().then(() => {
 		return net.fetch(pathToFileURL(filePath).toString());
 	});
 
-	createWindow();
+	const mainWindow = createWindow();
 
 	autoUpdater.on('error', console.error);
 	autoUpdater.checkForUpdatesAndNotify().catch(console.error);
 
 	exposeIPC(routes);
+
+	// Own the MPRIS service ourselves (Linux only; no-op elsewhere).
+	initMpris({
+		onCommand: (command: MprisCommand) => {
+			const win = BrowserWindow.getAllWindows()[0] ?? mainWindow;
+			if (!win?.isDestroyed()) win.webContents.send('zeta:media-command', command);
+		},
+		onRaise: () => {
+			const win = BrowserWindow.getAllWindows()[0] ?? mainWindow;
+			if (win?.isDestroyed()) return;
+			if (win.isMinimized()) win.restore();
+			win.show();
+			win.focus();
+		},
+		onQuit: () => app.quit(),
+	}).catch((err) => console.warn('[mpris] init failed:', err));
 
 	// macOS: re-create a window when the dock icon is clicked and none are open.
 	app.on('activate', () => {
@@ -79,5 +104,8 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
 	if (process.platform !== 'darwin') app.quit();
 });
+
+// Release the MPRIS bus name cleanly so the desktop drops our entry.
+app.on('before-quit', () => shutdownMpris());
 
 export type Routes = typeof routes;

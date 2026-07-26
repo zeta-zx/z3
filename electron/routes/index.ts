@@ -1,4 +1,5 @@
 import { routes as music } from './music';
+import { routes as mpris } from './mpris';
 
 import { Client, type SetActivity, type SetActivityResponse } from '@xhayper/discord-rpc';
 
@@ -23,4 +24,5 @@ export const routes = {
         return await rpc.user.setActivity(activity);
     },
     ...music,
+    ...mpris,
 };

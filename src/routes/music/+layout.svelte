@@ -3,12 +3,13 @@
     import Icon from "$lib/components/Icon.svelte";
     import MusicPlayer from "$lib/components/MusicPlayer.svelte";
     import MiniMusicPlayer from "$lib/components/MiniMusicPlayer.svelte";
-    import { previousTrack, nextTrack, playerState, cache, loadTrack, resetState, applyCache, isNextTrackAvailable } from "$lib/state/player.svelte";
+    import { previousTrack, nextTrack, playerState, cache, loadTrack, resetState, applyCache, isNextTrackAvailable, isPreviousTrackAvailable } from "$lib/state/player.svelte";
     import { page } from "$app/state";
     import { fade } from "svelte/transition";
     import { untrack, onDestroy } from "svelte";
     import { updateThumbnailUrl } from "$lib/utils";
     import { toasts } from "$lib/state/toast.svelte";
+    import { onMediaCommand, type MediaCommand } from "$lib/mpris";
     import type { Song } from "$lib/schema";
 
     let { children } = $props();
@@ -55,6 +56,120 @@
     });
 
     onDestroy(() => flushListen());
+
+    // --- MPRIS (Linux): the main process owns org.mpris.MediaPlayer2.zeta and
+    //     needs our state pushed to it; commands come back over the bridge. ---
+
+    function trackUrl(track: Song): string | undefined {
+        if (track.id.startsWith("yt:")) return `https://music.youtube.com/watch?v=${track.id.slice(3)}`;
+        return undefined;
+    }
+
+    // Embedded cover bytes are only worth sending once per track; the main
+    // process caches the resolved art URL by track id.
+    let artSentFor: string | null = null;
+
+    function publishMpris(seeked = false) {
+        const track = playerState.currentTrack;
+        // Prefer a real remote cover URL; fall back to embedded bytes, which the
+        // main process caches to a file:// URL.
+        const remote = track?.thumbnails.find((t) => t.url);
+        const needsArt = !!track && track.id !== artSentFor;
+        const embedded = needsArt ? track?.thumbnails.find((t) => t.data?.length) : undefined;
+        if (track) artSentFor = track.id;
+
+        client
+            .mprisUpdate({
+                track: track
+                    ? {
+                          id: track.id,
+                          title: track.title,
+                          artists: track.artists.map((a) => a.name),
+                          album: track.album?.title ?? null,
+                          durationSec: playerState.duration || track.duration || 0,
+                          artUrl: remote?.url ? updateThumbnailUrl(remote.url) : undefined,
+                          artData: embedded?.data ? $state.snapshot(embedded.data) : undefined,
+                          artMimetype: embedded?.mimetype,
+                          url: trackUrl(track),
+                      }
+                    : null,
+                paused: playerState.paused,
+                positionSec: playerState.currentTime || 0,
+                canNext: isNextTrackAvailable(),
+                canPrevious: isPreviousTrackAvailable(),
+                loop: playerState.loop,
+                shuffle: playerState.shuffle,
+                volume: audioElement?.volume ?? 1,
+                seeked,
+            })
+            .catch(() => {});
+    }
+
+    // Republish whenever anything MPRIS exposes changes. Position is handled
+    // separately (the main process interpolates between syncs).
+    $effect(() => {
+        void playerState.currentTrack;
+        void playerState.paused;
+        void playerState.duration;
+        void playerState.loop;
+        void playerState.shuffle;
+        void playerState._upcomingTrack;
+        untrack(() => publishMpris());
+    });
+
+    // Periodic position resync to correct any interpolation drift.
+    $effect(() => {
+        const timer = setInterval(() => {
+            if (!playerState.paused && playerState.currentTrack) untrack(() => publishMpris());
+        }, 5000);
+        return () => clearInterval(timer);
+    });
+
+    $effect(() => {
+        return onMediaCommand((command: MediaCommand) => {
+            const track = playerState.currentTrack;
+            switch (command.type) {
+                case "play":
+                    if (track) playerState.paused = false;
+                    break;
+                case "pause":
+                    playerState.paused = true;
+                    break;
+                case "playpause":
+                    if (track) playerState.paused = !playerState.paused;
+                    break;
+                case "stop":
+                    playerState.paused = true;
+                    playerState.currentTime = 0;
+                    break;
+                case "next":
+                    nextTrack();
+                    break;
+                case "previous":
+                    previousTrack();
+                    break;
+                case "seek": {
+                    const target = (playerState.currentTime || 0) + command.offsetSec;
+                    playerState.currentTime = Math.min(Math.max(0, target), playerState.duration || 0);
+                    publishMpris(true);
+                    break;
+                }
+                case "setPosition":
+                    playerState.currentTime = Math.min(Math.max(0, command.positionSec), playerState.duration || 0);
+                    publishMpris(true);
+                    break;
+                case "setLoop":
+                    playerState.loop = command.loop;
+                    break;
+                case "setShuffle":
+                    playerState.shuffle = command.shuffle;
+                    break;
+                case "setVolume":
+                    if (audioElement) audioElement.volume = command.volume;
+                    break;
+            }
+        });
+    });
 
     // Consecutive playback failures, to avoid skipping forever through a broken
     // playlist. Reset on any successful load.
@@ -295,7 +410,10 @@
         }}
         ontimeupdate={accumulatePlaytime}
         onplay={updatePositionState}
-        onseeked={updatePositionState}
+        onseeked={() => {
+            updatePositionState();
+            publishMpris(true);
+        }}
         onerror={() => {
             // Decode/playback failure on a loaded stream: surface it and, in a
             // playlist, skip onward instead of stalling.
