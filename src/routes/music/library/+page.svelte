@@ -1,344 +1,251 @@
 <script lang="ts">
     import Icon from "$lib/components/Icon.svelte";
-    import { libraryState } from "$lib/state/library.svelte";
-    import { playerState, playPlaylist } from "$lib/state/player.svelte";
-    import { formatDate, createPlaceholderUrl, Font, formatTime, getThumbnailUrl } from "$lib/utils";
-    import { fade, fly } from "svelte/transition";
-    import type { Playlist, Song } from "$lib/schema";
+    import MediaCard from "$lib/components/MediaCard.svelte";
+    import Cover from "$lib/components/Cover.svelte";
+    import { libraryState, FAVOURITES_ID } from "$lib/state/library.svelte";
+    import { playerState, playPlaylist, togglePlay } from "$lib/state/player.svelte";
+    import { ui } from "$lib/state/ui.svelte";
+    import { createPlaylistWith, openPlaylist } from "$lib/actions";
+    import { formatLongDuration } from "$lib/utils";
+    import type { Playlist } from "$lib/schema";
 
-    let playlists = $derived(libraryState.playlists);
+    let filter = $state("");
+    let sort = $state<"recent" | "name" | "size">("recent");
 
-    let openPlaylistId = $state<string | null>(null);
-    // Derive from the store so live updates (rename, thumbnail, reorder) flow through.
-    let currentlyOpenPlaylist = $derived<Playlist | null>(
-        openPlaylistId ? playlists.find((p) => p.id === openPlaylistId) ?? null : null,
-    );
+    const playlists = $derived.by(() => {
+        const q = filter.trim().toLowerCase();
+        const list = libraryState.playlists.filter((p) => !q || p.name.toLowerCase().includes(q));
+        const fav = list.filter((p) => p.id === FAVOURITES_ID);
+        const rest = list.filter((p) => p.id !== FAVOURITES_ID);
+        if (sort === "name") rest.sort((a, b) => a.name.localeCompare(b.name));
+        else if (sort === "size") rest.sort((a, b) => b.tracks.length - a.tracks.length);
+        else rest.sort((a, b) => b.createdAt - a.createdAt);
+        return [...fav, ...rest];
+    });
 
-    // Name dialog (create / rename).
-    let dialogMode = $state<"create" | "rename" | null>(null);
-    let dialogValue = $state("");
-    let dialogTargetId = $state<string | null>(null);
+    const totalSongs = $derived(new Set(libraryState.playlists.flatMap((p) => p.tracks.map((t) => t.id))).size);
+    const duration = (p: Playlist) => p.tracks.reduce((s, t) => s + (t.duration || 0), 0);
 
-    const totalDuration = (playlist: Playlist) =>
-        playlist.tracks.map((t) => t.duration).reduce((sum, cur) => (sum ?? 0) + (cur ?? 0), 0);
-
-    function openCreateDialog() {
-        dialogMode = "create";
-        dialogValue = "";
-        dialogTargetId = null;
+    function play(p: Playlist) {
+        if (playerState.currentPlaylist?.id === p.id) togglePlay();
+        else playPlaylist(p);
     }
 
-    function openRenameDialog(playlist: Playlist) {
-        dialogMode = "rename";
-        dialogValue = playlist.name;
-        dialogTargetId = playlist.id;
+    function menu(e: MouseEvent, p: Playlist) {
+        ui.openMenu(e, [
+            { label: "Play", icon: "play", disabled: !p.tracks.length, action: () => playPlaylist(p) },
+            { label: "Shuffle play", icon: "shuffle", disabled: !p.tracks.length, action: () => playPlaylist(p, undefined, true) },
+            { label: "Open", icon: "arrow-up-right", action: () => openPlaylist(p) },
+            { label: "Download all", icon: "download", action: () => libraryState.downloadPlaylist(p) },
+            ...(!p.isProtected
+                ? [
+                      { separator: true },
+                      {
+                          label: "Rename…",
+                          icon: "pencil",
+                          action: async () => {
+                              const name = await ui.prompt("Rename playlist", { value: p.name });
+                              if (name) libraryState.renamePlaylist(p.id, name);
+                          },
+                      },
+                      {
+                          label: "Delete",
+                          icon: "trash-2",
+                          danger: true,
+                          action: async () => {
+                              if (await ui.confirm(`Delete “${p.name}”?`, { message: "The playlist file is removed; downloaded songs stay in your music folder.", confirmLabel: "Delete", danger: true }))
+                                  libraryState.deletePlaylist(p.id);
+                          },
+                      },
+                  ]
+                : []),
+        ]);
     }
-
-    function closeDialog() {
-        dialogMode = null;
-        dialogValue = "";
-        dialogTargetId = null;
-    }
-
-    async function submitDialog(e: Event) {
-        e.preventDefault();
-        const name = dialogValue.trim();
-        if (!name) return;
-
-        if (dialogMode === "create") {
-            const created = await libraryState.createPlaylist(name);
-            if (created) openPlaylistId = created.id;
-        } else if (dialogMode === "rename" && dialogTargetId) {
-            await libraryState.renamePlaylist(dialogTargetId, name);
-        }
-        closeDialog();
-    }
-
-    async function deletePlaylist(playlist: Playlist) {
-        if (playlist.isProtected) return;
-        if (!confirm(`Delete playlist "${playlist.name}"? This cannot be undone.`)) return;
-        await libraryState.deletePlaylist(playlist.id);
-        if (openPlaylistId === playlist.id) openPlaylistId = null;
-    }
-
-    function handleEditImage(playlist: Playlist) {
-        const input = document.createElement("input");
-        input.type = "file";
-        input.accept = "image/*";
-        input.click();
-        input.addEventListener("change", () => {
-            const file = input.files?.[0];
-            if (!file) return;
-            const reader = new FileReader();
-            reader.onload = () => {
-                if (!reader.result) return;
-                libraryState.saveThumbnail(playlist.id, reader.result.toString());
-            };
-            reader.readAsDataURL(file);
-        });
-    }
-
-    // ---- drag reorder ----
-    let dragIndex = $state<number | null>(null);
-    let dragOverIndex = $state<number | null>(null);
-
-    function onDrop(playlist: Playlist) {
-        if (dragIndex === null || dragOverIndex === null || dragIndex === dragOverIndex) {
-            dragIndex = dragOverIndex = null;
-            return;
-        }
-        const ids = playlist.tracks.map((t) => t.id);
-        const [moved] = ids.splice(dragIndex, 1);
-        ids.splice(dragOverIndex, 0, moved);
-        libraryState.reorderPlaylist(playlist.id, ids);
-        dragIndex = dragOverIndex = null;
-    }
-
-    const thumbFor = (playlist: Playlist) =>
-        playlist.thumbnail ??
-        createPlaceholderUrl({ width: 256, height: 256, text: playlist.name, font: Font.NotoSans });
 </script>
 
-{#if !currentlyOpenPlaylist}
-    <p>
-        Your music is located at <code>{libraryState.path || "…"}</code>.
-    </p>
-    <div class="results search-results playlists">
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <article class="playlist" onclick={openCreateDialog}>
-            <div class="img-wrapper">
-                <img
-                    src={createPlaceholderUrl({
-                        width: 256,
-                        height: 256,
-                        text: "+",
-                        font: Font.NotoSans,
-                    })}
-                    alt="Create Playlist"
-                />
-            </div>
-            <div class="info-wrapper">
-                <h4>Create Playlist</h4>
-            </div>
-        </article>
-        {#each playlists as playlist (playlist.id)}
-            {@const duration = formatTime(totalDuration(playlist))}
-            <!-- svelte-ignore (a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions) -->
-            <article class="playlist" onclick={() => (openPlaylistId = playlist.id)}>
-                <div class="img-wrapper">
-                    <img src={thumbFor(playlist)} alt="Playlist Thumbnail" referrerPolicy="no-referrer" />
-                </div>
-                <div class="info-wrapper">
-                    <h4 title={playlist.name}>{playlist.name}</h4>
-                    <small title="Created {formatDate(playlist.createdAt)}">
-                        <Icon name="clock-plus" />
-                        Created {formatDate(playlist.createdAt)}
-                    </small>
-                    <small title="{playlist.tracks.length} tracks">
-                        <Icon name="square-library" />
-                        {playlist.tracks.length} tracks
-                    </small>
-                    <small title="Duration: {duration}">
-                        <Icon name="clock" />
-                        Duration: {duration}
-                    </small>
-                </div>
-            </article>
-        {/each}
-    </div>
-{:else}
-    {@const playlist = currentlyOpenPlaylist}
-    {@const duration = formatTime(totalDuration(playlist))}
-    <div class="playlist-view" in:fly={{ y: 20, duration: 300 }} out:fade={{ duration: 150 }}>
-        <button class="secondary back-btn" onclick={() => (openPlaylistId = null)}>
-            <Icon name="arrow-left" /> Back to Library
-        </button>
-        <div class="top-section">
-            <img src={thumbFor(playlist)} alt="Playlist Thumbnail" referrerPolicy="no-referrer" />
-            <div class="info-wrapper">
-                <h1 class="zeta" title={playlist.name}>{playlist.name}</h1>
-                <small title="Created {formatDate(playlist.createdAt)}">
-                    <Icon name="clock-plus" />
-                    {formatDate(playlist.createdAt)}
-                </small>
-                <small title="{playlist.tracks.length} tracks">
-                    <Icon name="square-library" />
-                    {playlist.tracks.length} tracks
-                </small>
-                <small title="Duration: {duration}">
-                    <Icon name="clock" />
-                    Duration: {duration}
-                </small>
-                <br />
-                <div class="action-row">
-                    {#if playerState.currentPlaylist?.id === playlist.id}
-                        <button class="primary" onclick={() => (playerState.paused = !playerState.paused)}>
-                            <Icon name={playerState.paused ? "play" : playerState.isLoading ? "loader-circle" : "pause"} />
-                        </button>
-                    {:else}
-                        <button class="primary" disabled={playlist.tracks.length === 0} onclick={() => playPlaylist(playlist)}>
-                            <Icon name="play" />
-                        </button>
-                    {/if}
-                    <button class="secondary" disabled={playlist.tracks.length === 0} onclick={() => playPlaylist(playlist, 0, true)}>
-                        <Icon name="shuffle" />
-                    </button>
-                    <button class="secondary" onclick={() => handleEditImage(playlist)} title="Edit Image">
-                        <Icon name="image" />
-                    </button>
-                    {#if !playlist.isProtected}
-                        <button class="secondary" onclick={() => openRenameDialog(playlist)} title="Rename">
-                            <Icon name="pencil" />
-                        </button>
-                        <button class="secondary" onclick={() => deletePlaylist(playlist)} title="Delete playlist">
-                            <Icon name="trash-2" />
-                        </button>
-                    {/if}
-                </div>
-            </div>
+<div class="page">
+    <header class="head">
+        <div class="head-text">
+            <span class="kicker"><Icon name="library-big" /> Collection</span>
+            <h1 class="page-title">Library</h1>
+            <p class="muted">
+                {libraryState.playlists.length} playlists · {totalSongs} songs
+                <span class="path" title={libraryState.path}><Icon name="folder" /> {libraryState.path || "…"}</span>
+            </p>
         </div>
-        <br />
-        <div class="track-list">
-            {#if playlist.tracks.length === 0}
-                <p><small>This playlist is empty. Add songs from the search page.</small></p>
-            {/if}
-            {#each playlist.tracks as track, i (track.id)}
-                <!-- svelte-ignore a11y_no_static_element_interactions -->
-                <div
-                    class="track-row"
-                    class:active={playerState.currentTrack?.id === track.id}
-                    class:drag-over={dragOverIndex === i}
-                    draggable="true"
-                    ondragstart={() => (dragIndex = i)}
-                    ondragover={(e) => {
-                        e.preventDefault();
-                        dragOverIndex = i;
-                    }}
-                    ondragend={() => (dragIndex = dragOverIndex = null)}
-                    ondrop={(e) => {
-                        e.preventDefault();
-                        onDrop(playlist);
-                    }}
-                >
-                    <span class="track-num">#{i + 1}</span>
-                    <img src={getThumbnailUrl(track.thumbnails, track.title)} alt="Track Cover" referrerPolicy="no-referrer" />
-                    <div class="track-info">
-                        <strong>{track.title}</strong>
-                        <small>{track.artists.map((a) => a.name).join(", ")}</small>
-                    </div>
-                    {#if track.isDownloaded}
-                        <span class="downloaded-badge" title="Downloaded to disk">
-                            <Icon name="arrow-big-down-dash" /> Downloaded
-                        </span>
-                    {/if}
-                    <div class="track-action-row">
-                        {#if playerState.currentTrack?.id === track.id}
-                            <button class="primary" onclick={() => (playerState.paused = !playerState.paused)}>
-                                <Icon name={playerState.paused ? "play" : playerState.isLoading ? "loader-circle" : "pause"} />
-                            </button>
-                        {:else}
-                            <button class="primary" onclick={() => playPlaylist(playlist, i)}>
-                                <Icon name="play" />
-                            </button>
-                        {/if}
-                        <button
-                            class={libraryState.isInPlaylist("favourites.m3u8", track.id) ? "primary" : "secondary"}
-                            title="Toggle Favourite"
-                            onclick={() => libraryState.toggleFromPlaylist("favourites.m3u8", track)}
-                        >
-                            <Icon name="heart" />
-                        </button>
-                        <button
-                            class="secondary"
-                            title="Remove from playlist"
-                            onclick={() => libraryState.removeFromPlaylist(playlist.id, track.id)}
-                        >
-                            <Icon name="trash-2" />
-                        </button>
-                    </div>
-                </div>
+        <button class="btn btn-primary" onclick={() => createPlaylistWith()}><Icon name="plus" /> New playlist</button>
+    </header>
+
+    <div class="toolbar">
+        <label class="filter">
+            <Icon name="search" />
+            <input bind:value={filter} placeholder="Filter playlists" spellcheck="false" />
+        </label>
+        <div class="segmented">
+            <button aria-pressed={sort === "recent"} onclick={() => (sort = "recent")}>Recent</button>
+            <button aria-pressed={sort === "name"} onclick={() => (sort = "name")}>A–Z</button>
+            <button aria-pressed={sort === "size"} onclick={() => (sort = "size")}>Size</button>
+        </div>
+    </div>
+
+    {#if libraryState.loading && !libraryState.playlists.length}
+        <div class="grid-cards">
+            {#each Array(6) as _}
+                <div><div class="skeleton" style="aspect-ratio:1"></div><div class="skeleton" style="height:14px;margin-top:12px;width:70%"></div></div>
             {/each}
         </div>
-    </div>
-{/if}
-
-{#if dialogMode}
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div
-        class="modal-backdrop"
-        onclick={(e) => {
-            if (e.target === e.currentTarget) closeDialog();
-        }}
-        transition:fade={{ duration: 150 }}
-    >
-        <form class="modal" onsubmit={submitDialog}>
-            <h4>{dialogMode === "create" ? "Create Playlist" : "Rename Playlist"}</h4>
-            <!-- svelte-ignore a11y_autofocus -->
-            <input type="text" bind:value={dialogValue} placeholder="Playlist name" autofocus />
-            <div class="modal-actions">
-                <button type="button" class="secondary" onclick={closeDialog}>Cancel</button>
-                <button type="submit" class="primary" disabled={!dialogValue.trim()}>
-                    {dialogMode === "create" ? "Create" : "Save"}
+    {:else}
+        <div class="grid-cards">
+            {#each playlists as p, i (p.id)}
+                <MediaCard
+                    title={p.name}
+                    subtitle="{p.tracks.length} songs{p.tracks.length ? ` · ${formatLongDuration(duration(p))}` : ''}"
+                    src={p.thumbnail}
+                    index={i}
+                    playing={playerState.currentPlaylist?.id === p.id}
+                    paused={playerState.paused}
+                    onclick={() => openPlaylist(p)}
+                    onplay={p.tracks.length ? () => play(p) : undefined}
+                    oncontextmenu={(e) => menu(e, p)}
+                >
+                    {#snippet art()}
+                        {#if p.id === FAVOURITES_ID}
+                            <div class="fav-art">
+                                <Icon name="heart" />
+                            </div>
+                        {:else}
+                            <Cover src={p.thumbnail} title={p.name} size="100%" radius="var(--r-md)" />
+                        {/if}
+                    {/snippet}
+                </MediaCard>
+            {/each}
+            {#if !filter}
+                <button class="create" onclick={() => createPlaylistWith()}>
+                    <span class="plus"><Icon name="plus" /></span>
+                    <span>New playlist</span>
                 </button>
-            </div>
-        </form>
-    </div>
-{/if}
+            {/if}
+        </div>
+        {#if filter && !playlists.length}
+            <div class="empty"><Icon name="search-x" /><h3>No playlists match “{filter}”</h3></div>
+        {/if}
+    {/if}
+</div>
 
 <style>
-    .track-row {
-        cursor: grab;
+    .head {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 18px 4px 26px;
     }
-    .track-row.drag-over {
-        outline: 2px dashed var(--pico-primary, #7aa2f7);
-        outline-offset: -2px;
+    .head-text {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        min-width: 0;
     }
-    .downloaded-badge {
+    .head p {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 4px 14px;
+    }
+    .path {
         display: inline-flex;
         align-items: center;
-        gap: 0.25rem;
-        flex-shrink: 0;
-        margin-right: 0.5rem;
-        padding: 0.1rem 0.45rem;
-        border-radius: 999px;
-        font-size: 0.7rem;
+        gap: 5px;
+        font-size: 12.5px;
+        color: var(--text-3);
+        max-width: 420px;
+        overflow: hidden;
+        text-overflow: ellipsis;
         white-space: nowrap;
-        color: var(--pico-ins-color, #2a9d8f);
-        border: 1px solid color-mix(in srgb, var(--pico-ins-color, #2a9d8f) 45%, transparent);
-        background: color-mix(in srgb, var(--pico-ins-color, #2a9d8f) 12%, transparent);
     }
-    .downloaded-badge :global(svg) {
-        width: 0.85em;
-        height: 0.85em;
+    .path :global(svg) {
+        width: 13px;
+        height: 13px;
+        flex-shrink: 0;
     }
-    .modal-backdrop {
-        position: fixed;
-        inset: 0;
-        background: rgba(0, 0, 0, 0.5);
+    .toolbar {
         display: flex;
         align-items: center;
-        justify-content: center;
-        z-index: 1100;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 26px;
     }
-    .modal {
-        background: var(--pico-card-background-color, #1c1c1e);
-        border: 1px solid var(--pico-muted-border-color, #333);
-        border-radius: var(--pico-border-radius, 0.5rem);
-        padding: 1.25rem;
-        width: min(90vw, 380px);
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
-    }
-    .modal input {
-        width: 100%;
-    }
-    .modal-actions {
+    .filter {
         display: flex;
-        gap: 0.5rem;
-        justify-content: flex-end;
+        align-items: center;
+        gap: 8px;
+        width: min(320px, 100%);
+        height: 38px;
+        padding: 0 14px;
+        border-radius: var(--r-full);
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        color: var(--text-3);
     }
-    .modal-actions button {
-        width: auto;
+    .filter:focus-within {
+        border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+    }
+    .filter :global(svg) {
+        width: 16px;
+        height: 16px;
+    }
+    .filter input {
+        flex: 1;
+        min-width: 0;
+        background: none;
+        border: none;
+        outline: none;
+        color: var(--text);
+        font: inherit;
+    }
+    .fav-art {
+        width: 100%;
+        height: 100%;
+        display: grid;
+        place-items: center;
+        background: radial-gradient(120% 100% at 0% 0%, #7c5cff, #4a2bd6 45%, #b04ac9);
+    }
+    .fav-art :global(svg) {
+        width: 64px;
+        height: 64px;
+        fill: #fff;
+        margin-bottom: 40px;
+        filter: drop-shadow(0 10px 20px rgb(0 0 0 / 0.3));
+    }
+    .create {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        aspect-ratio: 1;
+        border-radius: 26px;
+        border: 1.5px dashed rgb(255 255 255 / 0.2);
+        background: rgb(16 13 24 / 0.5);
+        color: var(--text-2);
+        font-weight: 650;
+        transition: border-color 0.25s, color 0.25s, background 0.25s;
+    }
+    .create:hover {
+        border-color: var(--accent);
+        color: var(--text);
+        background: var(--accent-soft);
+    }
+    .plus {
+        display: grid;
+        place-items: center;
+        width: 52px;
+        height: 52px;
+        border-radius: 50%;
+        background: var(--surface-3);
+        transition: transform 0.35s var(--ease-spring);
+    }
+    .create:hover .plus {
+        transform: rotate(90deg) scale(1.08);
     }
 </style>

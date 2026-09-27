@@ -16,7 +16,7 @@ export type MediaCommand =
     | { type: "previous" }
     | { type: "seek"; offsetSec: number }
     | { type: "setPosition"; positionSec: number }
-    | { type: "setLoop"; loop: boolean }
+    | { type: "setRepeat"; repeat: "off" | "all" | "one" }
     | { type: "setShuffle"; shuffle: boolean }
     | { type: "setVolume"; volume: number };
 

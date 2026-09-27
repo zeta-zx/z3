@@ -74,10 +74,31 @@ function deserialiseThumbnails(raw: any[]): Thumbnail[] {
     }));
 }
 
+/**
+ * msgpack decodes binary fields as *views* into the one big buffer holding the
+ * whole index. Structured clone (Electron IPC, postMessage) serialises a view's
+ * entire underlying ArrayBuffer, so sending a single song's cover would copy
+ * the full multi-megabyte index every time. Give each cover its own buffer.
+ */
+function detachThumbnailBytes(records: Record<string, IndexRecord>) {
+    for (const record of Object.values(records)) {
+        for (const thumb of record.thumbnails ?? []) {
+            // `new Uint8Array(view)` always copies. (Not `.slice()`: the decoder
+            // can return Node Buffers, whose slice() is just another view.)
+            if (thumb.data && thumb.data.byteLength !== thumb.data.buffer.byteLength) thumb.data = new Uint8Array(thumb.data);
+        }
+    }
+}
+
 /* ------------------------------- the store -------------------------------- */
 
 export class MetadataStore {
     private cache: IndexFile | null = null;
+    // Shared in-flight load so concurrent callers don't each build (and then
+    // overwrite each other with) their own cache object.
+    private loading: Promise<IndexFile> | null = null;
+    // Writes are chained so two persists never interleave on disk.
+    private writing: Promise<void> = Promise.resolve();
 
     constructor(private vfs: VFS) {}
 
@@ -85,60 +106,96 @@ export class MetadataStore {
     setVfs(vfs: VFS) {
         this.vfs = vfs;
         this.cache = null;
+        this.loading = null;
     }
 
-    private async load(): Promise<IndexFile> {
-        if (this.cache) return this.cache;
+    private load(): Promise<IndexFile> {
+        if (this.cache) return Promise.resolve(this.cache);
+        if (!this.loading) {
+            this.loading = this.readIndex()
+                .then((index) => (this.cache = index))
+                .finally(() => (this.loading = null));
+        }
+        return this.loading;
+    }
+
+    /** Keep a copy of an undecodable index instead of silently overwriting it. */
+    private async backupCorrupt(path: string) {
+        try {
+            await this.vfs.rename(path, `${path}.corrupt-${Date.now()}.bak`);
+        } catch (err) {
+            console.warn('[metadata] Could not back up corrupt index:', err);
+        }
+    }
+
+    private async readIndex(): Promise<IndexFile> {
+        // I/O errors (e.g. a dropped SFTP/FTP connection) propagate: treating
+        // them as "no index" would let the next write wipe the real one.
 
         // Preferred: MessagePack index.
         if (await this.vfs.exists(INDEX_PATH)) {
+            const raw = await this.vfs.readFile(INDEX_PATH);
             try {
-                const decoded = decode(await this.vfs.readFile(INDEX_PATH)) as any;
-                this.cache = {
-                    version: decoded?.version || INDEX_VERSION,
-                    records: decoded?.records || {},
-                };
-                return this.cache;
+                const decoded = decode(raw) as any;
+                const records: Record<string, IndexRecord> = decoded?.records || {};
+                detachThumbnailBytes(records);
+                return { version: decoded?.version || INDEX_VERSION, records };
             } catch (err) {
-                console.warn('[metadata] Corrupt index.msgpack, starting fresh:', err);
+                console.warn('[metadata] Corrupt index.msgpack, backing it up and starting fresh:', err);
+                await this.backupCorrupt(INDEX_PATH);
             }
         }
 
         // Fallback: migrate a legacy JSON index (base64 thumbnails) if present.
         if (await this.vfs.exists(LEGACY_JSON_PATH)) {
+            const raw = await this.vfs.readFile(LEGACY_JSON_PATH);
             try {
-                const parsed = JSON.parse((await this.vfs.readFile(LEGACY_JSON_PATH)).toString('utf-8'));
+                const parsed = JSON.parse(raw.toString('utf-8'));
                 const records: Record<string, IndexRecord> = {};
                 for (const [id, rec] of Object.entries(parsed.records || {})) {
                     const r = rec as any;
                     records[id] = { ...r, thumbnails: deserialiseThumbnails(r.thumbnails) };
                 }
-                this.cache = { version: INDEX_VERSION, records };
-                return this.cache;
+                return { version: INDEX_VERSION, records };
             } catch (err) {
-                console.warn('[metadata] Corrupt index.json, starting fresh:', err);
+                console.warn('[metadata] Corrupt index.json, backing it up and starting fresh:', err);
+                await this.backupCorrupt(LEGACY_JSON_PATH);
             }
         }
 
-        this.cache = { version: INDEX_VERSION, records: {} };
-        return this.cache;
+        return { version: INDEX_VERSION, records: {} };
     }
 
-    private async persist(): Promise<void> {
-        if (!this.cache) return;
-        await this.vfs.mkdir(INDEX_DIR);
-        // msgpack encodes Uint8Array thumbnail data natively; ignoreUndefined
-        // keeps optional fields out of the payload.
-        const encoded = encode(this.cache, { ignoreUndefined: true });
-        // encode() returns a view into a larger ArrayBuffer; respect its bounds.
-        await this.vfs.writeFile(INDEX_PATH, Buffer.from(encoded.buffer, encoded.byteOffset, encoded.byteLength));
+    private persist(): Promise<void> {
+        const run = async () => {
+            if (!this.cache) return;
+            await this.vfs.mkdir(INDEX_DIR);
+            // msgpack encodes Uint8Array thumbnail data natively; ignoreUndefined
+            // keeps optional fields out of the payload.
+            const encoded = encode(this.cache, { ignoreUndefined: true });
+            // encode() returns a view into a larger ArrayBuffer; respect its bounds.
+            const buf = Buffer.from(encoded.buffer, encoded.byteOffset, encoded.byteLength);
+            // Write-then-rename so a crash mid-write can't leave a truncated index.
+            const tmp = `${INDEX_PATH}.tmp`;
+            await this.vfs.writeFile(tmp, buf);
+            try {
+                await this.vfs.rename(tmp, INDEX_PATH);
+            } catch {
+                // Some remotes refuse to rename over an existing file.
+                await this.vfs.writeFile(INDEX_PATH, buf);
+                await this.vfs.unlink(tmp).catch(() => {});
+            }
 
-        // Retire the old JSON index once we've written the msgpack one.
-        try {
-            if (await this.vfs.exists(LEGACY_JSON_PATH)) await this.vfs.unlink(LEGACY_JSON_PATH);
-        } catch {
-            /* best-effort cleanup */
-        }
+            // Retire the old JSON index once we've written the msgpack one.
+            try {
+                if (await this.vfs.exists(LEGACY_JSON_PATH)) await this.vfs.unlink(LEGACY_JSON_PATH);
+            } catch {
+                /* best-effort cleanup */
+            }
+        };
+        const next = this.writing.then(run, run);
+        this.writing = next.catch(() => {});
+        return next;
     }
 
     async get(id: string): Promise<IndexRecord | undefined> {

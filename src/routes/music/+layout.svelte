@@ -1,426 +1,89 @@
 <script lang="ts">
-    import { client } from "$lib/ephaptic";
-    import Icon from "$lib/components/Icon.svelte";
-    import MusicPlayer from "$lib/components/MusicPlayer.svelte";
-    import MiniMusicPlayer from "$lib/components/MiniMusicPlayer.svelte";
-    import { previousTrack, nextTrack, playerState, cache, loadTrack, resetState, applyCache, isNextTrackAvailable, isPreviousTrackAvailable } from "$lib/state/player.svelte";
+    import PlayerEngine from "$lib/components/PlayerEngine.svelte";
+    import AmbientBackground from "$lib/components/AmbientBackground.svelte";
+    import Dock from "$lib/components/Dock.svelte";
+    import PlayerCapsule from "$lib/components/PlayerCapsule.svelte";
+    import NowPlaying from "$lib/components/NowPlaying.svelte";
+    import SidePanel from "$lib/components/SidePanel.svelte";
+    import ContextMenu from "$lib/components/ContextMenu.svelte";
+    import Dialog from "$lib/components/Dialog.svelte";
+    import Shortcuts from "$lib/components/Shortcuts.svelte";
+    import { ui } from "$lib/state/ui.svelte";
     import { page } from "$app/state";
-    import { fade } from "svelte/transition";
-    import { untrack, onDestroy } from "svelte";
-    import { updateThumbnailUrl } from "$lib/utils";
-    import { toasts } from "$lib/state/toast.svelte";
-    import { onMediaCommand, type MediaCommand } from "$lib/mpris";
-    import type { Song } from "$lib/schema";
+    import { afterNavigate } from "$app/navigation";
+    import { fly } from "svelte/transition";
 
     let { children } = $props();
 
-    let audioElement = $state<HTMLAudioElement>();
+    let main = $state<HTMLElement>();
 
-    // --- listening stats: accumulate actual played time and report a listen
-    //     event whenever we leave a track (or it ends). ---
-    let statsTrack: Song | null = null;
-    let playedMs = 0;
-    let lastTime = 0;
-
-    function flushListen() {
-        const track = statsTrack;
-        if (track && playedMs >= 1000) {
-            client
-                .statsRecordEvent(track.id, Math.round(playedMs), Date.now() - Math.round(playedMs), {
-                    title: track.title,
-                    artists: track.artists.map((a) => a.name),
-                    thumbnailUrl: track.thumbnails.find((t) => t.url)?.url,
-                })
-                .catch(() => {});
-        }
-        playedMs = 0;
-        lastTime = 0;
-    }
-
-    function accumulatePlaytime() {
-        if (!audioElement) return;
-        const t = audioElement.currentTime;
-        const dt = t - lastTime;
-        // Ignore seeks (large jumps) and paused gaps.
-        if (dt > 0 && dt < 2 && !playerState.paused) playedMs += dt * 1000;
-        lastTime = t;
-    }
-
-    // Flush the outgoing track's listen when the current track changes.
-    $effect(() => {
-        const track = playerState.currentTrack;
-        if (track?.id !== statsTrack?.id) {
-            untrack(() => flushListen());
-            statsTrack = track;
-        }
-    });
-
-    onDestroy(() => flushListen());
-
-    // --- MPRIS (Linux): the main process owns org.mpris.MediaPlayer2.zeta and
-    //     needs our state pushed to it; commands come back over the bridge. ---
-
-    function trackUrl(track: Song): string | undefined {
-        if (track.id.startsWith("yt:")) return `https://music.youtube.com/watch?v=${track.id.slice(3)}`;
-        return undefined;
-    }
-
-    // Embedded cover bytes are only worth sending once per track; the main
-    // process caches the resolved art URL by track id.
-    let artSentFor: string | null = null;
-
-    function publishMpris(seeked = false) {
-        const track = playerState.currentTrack;
-        // Prefer a real remote cover URL; fall back to embedded bytes, which the
-        // main process caches to a file:// URL.
-        const remote = track?.thumbnails.find((t) => t.url);
-        const needsArt = !!track && track.id !== artSentFor;
-        const embedded = needsArt ? track?.thumbnails.find((t) => t.data?.length) : undefined;
-        if (track) artSentFor = track.id;
-
-        client
-            .mprisUpdate({
-                track: track
-                    ? {
-                          id: track.id,
-                          title: track.title,
-                          artists: track.artists.map((a) => a.name),
-                          album: track.album?.title ?? null,
-                          durationSec: playerState.duration || track.duration || 0,
-                          artUrl: remote?.url ? updateThumbnailUrl(remote.url) : undefined,
-                          artData: embedded?.data ? $state.snapshot(embedded.data) : undefined,
-                          artMimetype: embedded?.mimetype,
-                          url: trackUrl(track),
-                      }
-                    : null,
-                paused: playerState.paused,
-                positionSec: playerState.currentTime || 0,
-                canNext: isNextTrackAvailable(),
-                canPrevious: isPreviousTrackAvailable(),
-                loop: playerState.loop,
-                shuffle: playerState.shuffle,
-                volume: audioElement?.volume ?? 1,
-                seeked,
-            })
-            .catch(() => {});
-    }
-
-    // Republish whenever anything MPRIS exposes changes. Position is handled
-    // separately (the main process interpolates between syncs).
-    $effect(() => {
-        void playerState.currentTrack;
-        void playerState.paused;
-        void playerState.duration;
-        void playerState.loop;
-        void playerState.shuffle;
-        void playerState._upcomingTrack;
-        untrack(() => publishMpris());
-    });
-
-    // Periodic position resync to correct any interpolation drift.
-    $effect(() => {
-        const timer = setInterval(() => {
-            if (!playerState.paused && playerState.currentTrack) untrack(() => publishMpris());
-        }, 5000);
-        return () => clearInterval(timer);
-    });
-
-    $effect(() => {
-        return onMediaCommand((command: MediaCommand) => {
-            const track = playerState.currentTrack;
-            switch (command.type) {
-                case "play":
-                    if (track) playerState.paused = false;
-                    break;
-                case "pause":
-                    playerState.paused = true;
-                    break;
-                case "playpause":
-                    if (track) playerState.paused = !playerState.paused;
-                    break;
-                case "stop":
-                    playerState.paused = true;
-                    playerState.currentTime = 0;
-                    break;
-                case "next":
-                    nextTrack();
-                    break;
-                case "previous":
-                    previousTrack();
-                    break;
-                case "seek": {
-                    const target = (playerState.currentTime || 0) + command.offsetSec;
-                    playerState.currentTime = Math.min(Math.max(0, target), playerState.duration || 0);
-                    publishMpris(true);
-                    break;
-                }
-                case "setPosition":
-                    playerState.currentTime = Math.min(Math.max(0, command.positionSec), playerState.duration || 0);
-                    publishMpris(true);
-                    break;
-                case "setLoop":
-                    playerState.loop = command.loop;
-                    break;
-                case "setShuffle":
-                    playerState.shuffle = command.shuffle;
-                    break;
-                case "setVolume":
-                    if (audioElement) audioElement.volume = command.volume;
-                    break;
-            }
-        });
-    });
-
-    // Consecutive playback failures, to avoid skipping forever through a broken
-    // playlist. Reset on any successful load.
-    let failCount = 0;
-
-    function handlePlaybackFailure(track: Song, err: unknown) {
-        if (playerState.currentTrack?.id !== track.id) return;
-
-        playerState.stream = null;
-        playerState.isLoading = false;
-        playerState.paused = true;
-
-        const msg = (err as any)?.message ?? String(err);
-
-        // If we're in a playlist, show the error and skip to the next track so
-        // playback keeps going — unless we've already skipped through the whole
-        // playlist (everything is broken).
-        const playlist = playerState.currentPlaylist;
-        if (playlist && isNextTrackAvailable() && failCount < playlist.tracks.length) {
-            failCount++;
-            toasts.error(`Skipping "${track.title}": ${msg}`);
-            nextTrack();
-        } else {
-            failCount = 0;
-            toasts.error(`Couldn't play "${track.title}": ${msg}`);
-        }
-    }
-
-    $effect(() => {
-        if (playerState.stream && audioElement)
-            audioElement.load();
-    });
-
-    $effect(() => {
-        const track = playerState.currentTrack;
-
-        if (!track) {
-            playerState.stream = null;
-            playerState.lyrics = [];
-            playerState.paused = true;
-            return;
-        }
-
-        const loadingId = track.id;
-
-        resetState();
-
-        if (cache.has(track.id)) {
-            applyCache(cache.get(track.id));
-            failCount = 0;
-        } else {
-            loadTrack(track)
-                .then(() => {
-                    if (playerState.currentTrack?.id === loadingId) {
-                        applyCache(cache.get(loadingId));
-                        failCount = 0;
-                    }
-                })
-                .catch((err) => handlePlaybackFailure(track, err));
-        }
-    });
-
-    $effect(() => {
-        if (playerState._upcomingTrack) {
-            // Preload in the background; ignore failures here (they'll be shown
-            // if/when the track actually becomes the current one).
-            loadTrack(playerState._upcomingTrack).catch(() => {});
-        }
-    });
-
-    $effect(() => {
-        const track = playerState.currentTrack;
-        if (!track || !('mediaSession' in navigator)) return;
-
-        navigator.mediaSession.metadata = new MediaMetadata({
-            title: track.title,
-            artist: track.artists.map(a => a.name).join(', '),
-            album: 'album' in track && track.album? track.album.title : 'Zeta Music',
-            artwork: track.thumbnails.map(t => ({
-                src: t.url ? updateThumbnailUrl(t.url) : (t.data ? URL.createObjectURL(new Blob([new Uint8Array(t.data)], { type: t.mimetype })) : ''),
-                sizes: `${t.width}x${t.height}`,
-                type: t.mimetype ?? 'image/jpeg',
-            })),
-        });
-    });
-
-    $effect(() => {
-        const track = playerState.currentTrack;
-        if (!track || !('mediaSession' in navigator)) return;
-
-        navigator.mediaSession.playbackState = playerState.paused ? 'paused' : 'playing';
-    });
-
-    $effect(() => {
-        const track = playerState.currentTrack;
-        if (!track || !('mediaSession' in navigator)) return;
-
-        navigator.mediaSession.setActionHandler('play', () => playerState.paused = false);
-        navigator.mediaSession.setActionHandler('pause', () => playerState.paused = true);
-
-        navigator.mediaSession.setActionHandler('seekto', details => {
-            if (details.seekTime !== undefined && details.seekTime !== null)
-                playerState.currentTime = details.seekTime;
-        });
-
-        navigator.mediaSession.setActionHandler('previoustrack', previousTrack);
-        navigator.mediaSession.setActionHandler('nexttrack', nextTrack);
-    });
-
-    function updatePositionState() {
-        const track = playerState.currentTrack;
-        if (!track || !('mediaSession' in navigator)) return;
-
-        navigator.mediaSession.setPositionState({
-            duration: playerState.duration || 0,
-            playbackRate: 1,
-            position: playerState.currentTime,
-        });
-    }
-
-    $effect(() => {
-        const track = playerState.currentTrack;
-        const paused = playerState.paused;
-
-        if (!track || paused) {
-            client.clearRPC();
-            return;
-        }
-
-        const elapsed = untrack(() => playerState.currentTime);
-
-        client.setRPC({
-            type: 2, // Listening
-            details: track.title,
-            state: track.artists.map(a => a.name).join(', '),
-            name: track.title,
-            startTimestamp: Date.now() - (elapsed * 1000),
-
-            // largeImageText: track.title,
-            largeImageUrl: updateThumbnailUrl(track.thumbnails.filter(t => !!t.url)?.at(0)?.url),
-            largeImageKey: updateThumbnailUrl(track.thumbnails.filter(t => !!t.url)?.at(0)?.url),
-
-            smallImageText: 'Zeta Music',
-            smallImageUrl: 'zeta',
-            smallImageKey: 'zeta',
-        })!.catch(console.error);
-    })
-
+    // Each page starts at the top.
+    afterNavigate(() => main?.scrollTo({ top: 0 }));
 </script>
 
-<br>
+<AmbientBackground
+    intensity={ui.nowPlayingOpen ? 1 : 0}
+    hidden={ui.nowPlayingOpen && ui.nowPlayingMode === "visualizer"}
+/>
 
-<div class="layout-grid">
-    <aside>
-        <nav>
-            <ul>
-                <li>
-					<a
-						href="/music/search"
-						aria-current={page.url.pathname === '/music/search' ? 'page' : undefined}
-					>
-						<Icon name="search" /> Search
-					</a>
-				</li>
-				<li>
-					<a
-						href="/music/library"
-						aria-current={page.url.pathname === '/music/library' ? 'page' : undefined}
-					>
-						<Icon name="library-big" /> Library
-					</a>
-				</li>
-				<li>
-					<a
-						href="/music/stats"
-						aria-current={page.url.pathname === '/music/stats' ? 'page' : undefined}
-					>
-						<Icon name="chart-no-axes-column" /> Stats
-					</a>
-				</li>
-				<li>
-					<a
-						href="/music/settings"
-						aria-current={page.url.pathname === '/music/settings' ? 'page' : undefined}
-					>
-						<Icon name="settings" /> Settings
-					</a>
-				</li>
-            </ul>
-        </nav>
+<div class="world" class:behind={ui.nowPlayingOpen} class:panel-open={!!ui.sidePanel}>
+    <main bind:this={main}>
+        {#key page.url.pathname}
+            <div class="route" in:fly={{ y: 18, duration: 480, delay: 80, opacity: 0 }}>
+                {@render children()}
+            </div>
+        {/key}
+    </main>
 
-        <br>
+    <Dock />
 
-        <MiniMusicPlayer />
-    </aside>
-
-    <div class="content">
-		<main class="container">
-            <h1 class="zeta"><span class="zcolor"><Icon name="audio-lines" /> Zeta</span> Music</h1>
-
-            <p>What do you want to check out?</p>
-
-            {#key page.url.pathname}
-                <div
-                    class="page-content-wrapper"
-                    in:fade={{ duration: 200, delay: 200 }}
-                    out:fade={{ duration: 200 }}>
-                    {@render children()}
-                </div>
-            {/key}
-        </main>
-	</div>
-</div>
-
-{#if playerState.currentTrack}
-    {#if playerState.maximised}
-        <MusicPlayer />
+    {#if ui.sidePanel}
+        <SidePanel />
     {/if}
 
-    <button
-        class='panel-control secondary'
-        onclick = { () => playerState.maximised = !playerState.maximised }
-    >
-        <Icon name="panel-bottom-{ playerState.maximised ? 'close' : 'open' }" />
-    </button>
+    <PlayerCapsule />
+</div>
 
-    <audio
-        id="audio-player"
-        bind:this={audioElement}
-        bind:paused={playerState.paused}
-        bind:currentTime={playerState.currentTime}
-        bind:duration={playerState.duration}
-        autoplay
-        onended={() => {
-            flushListen();
-            playerState.paused = true;
-            nextTrack();
-        }}
-        ontimeupdate={accumulatePlaytime}
-        onplay={updatePositionState}
-        onseeked={() => {
-            updatePositionState();
-            publishMpris(true);
-        }}
-        onerror={() => {
-            // Decode/playback failure on a loaded stream: surface it and, in a
-            // playlist, skip onward instead of stalling.
-            if (playerState.stream && playerState.currentTrack)
-                handlePlaybackFailure(playerState.currentTrack, new Error("This track could not be played."));
-        }}
-        src={playerState.stream ? URL.createObjectURL(new Blob([new Uint8Array(playerState.stream.data)], { type: playerState.stream.mimetype })) : null}
-    ></audio>
-
+{#if ui.nowPlayingOpen}
+    <NowPlaying />
 {/if}
+
+<PlayerEngine />
+<ContextMenu />
+<Dialog />
+<Shortcuts />
+
+<style>
+    .world {
+        position: relative;
+        z-index: 1;
+        height: 100vh;
+        transition: opacity 0.5s var(--ease-out), scale 0.6s var(--ease-out), visibility 0s;
+    }
+    /* Recede while the full-screen player is up, then stop painting entirely. */
+    .world.behind {
+        opacity: 0;
+        scale: 0.96;
+        pointer-events: none;
+        visibility: hidden;
+        transition: opacity 0.5s var(--ease-out), scale 0.6s var(--ease-out), visibility 0s 0.6s;
+    }
+    main {
+        height: 100%;
+        overflow-y: auto;
+        overflow-x: hidden;
+        /* room for the floating dock and player capsule */
+        padding: 88px 0 120px;
+        scroll-padding-top: 88px;
+        transition: padding-right 0.45s var(--ease-out);
+    }
+    /* make room for the floating queue/lyrics island on wide screens */
+    @media (min-width: 1180px) {
+        .panel-open main {
+            padding-right: calc(var(--panel-w) + 24px);
+        }
+    }
+    .route {
+        min-height: 100%;
+    }
+</style>

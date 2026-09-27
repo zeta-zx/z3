@@ -45,7 +45,7 @@ export interface MprisSnapshot {
     positionSec: number;
     canNext: boolean;
     canPrevious: boolean;
-    loop: boolean;
+    repeat: 'off' | 'all' | 'one';
     shuffle: boolean;
     volume: number;
     /** Set when the position jumped, so we raise the MPRIS `Seeked` signal. */
@@ -61,7 +61,7 @@ export type MprisCommand =
     | { type: 'previous' }
     | { type: 'seek'; offsetSec: number }
     | { type: 'setPosition'; positionSec: number }
-    | { type: 'setLoop'; loop: boolean }
+    | { type: 'setRepeat'; repeat: 'off' | 'all' | 'one' }
     | { type: 'setShuffle'; shuffle: boolean }
     | { type: 'setVolume'; volume: number };
 
@@ -184,7 +184,7 @@ export async function initMpris(handlers: MprisHandlers): Promise<boolean> {
         });
         player.on('loopStatus', (status: string) => {
             player.loopStatus = status;
-            cmd({ type: 'setLoop', loop: status !== 'None' });
+            cmd({ type: 'setRepeat', repeat: status === 'Track' ? 'one' : status === 'Playlist' ? 'all' : 'off' });
         });
         player.on('shuffle', (enabled: any) => {
             player.shuffle = !!enabled;
@@ -249,7 +249,7 @@ export function updateMpris(snapshot: MprisSnapshot): void {
 
         player.canGoNext = snapshot.canNext;
         player.canGoPrevious = snapshot.canPrevious;
-        player.loopStatus = snapshot.loop ? 'Playlist' : 'None';
+        player.loopStatus = snapshot.repeat === 'one' ? 'Track' : snapshot.repeat === 'all' ? 'Playlist' : 'None';
         player.shuffle = snapshot.shuffle;
         if (typeof snapshot.volume === 'number') player.volume = snapshot.volume;
 

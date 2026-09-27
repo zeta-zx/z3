@@ -39,40 +39,56 @@ interface StatsFile {
 
 export class StatsStore {
     private cache: StatsFile | null = null;
+    private loading: Promise<StatsFile> | null = null;
+    private writing: Promise<void> = Promise.resolve();
 
     constructor(private vfs: VFS) {}
 
     setVfs(vfs: VFS) {
         this.vfs = vfs;
         this.cache = null;
+        this.loading = null;
     }
 
-    private async load(): Promise<StatsFile> {
-        if (this.cache) return this.cache;
+    private load(): Promise<StatsFile> {
+        if (this.cache) return Promise.resolve(this.cache);
+        if (!this.loading) {
+            this.loading = this.readStats()
+                .then((stats) => (this.cache = stats))
+                .finally(() => (this.loading = null));
+        }
+        return this.loading;
+    }
 
+    private async readStats(): Promise<StatsFile> {
+        // Read errors propagate (a flaky remote must not look like "no history").
         if (await this.vfs.exists(STATS_PATH)) {
+            const raw = await this.vfs.readFile(STATS_PATH);
             try {
-                const decoded = decode(await this.vfs.readFile(STATS_PATH)) as any;
-                this.cache = {
+                const decoded = decode(raw) as any;
+                return {
                     version: decoded?.version || STATS_VERSION,
                     events: Array.isArray(decoded?.events) ? decoded.events : [],
                     names: decoded?.names || {},
                 };
-                return this.cache;
             } catch (err) {
-                console.warn('[stats] Corrupt stats.msgpack, starting fresh:', err);
+                console.warn('[stats] Corrupt stats.msgpack, backing it up and starting fresh:', err);
+                await this.vfs.rename(STATS_PATH, `${STATS_PATH}.corrupt-${Date.now()}.bak`).catch(() => {});
             }
         }
-
-        this.cache = { version: STATS_VERSION, events: [], names: {} };
-        return this.cache;
+        return { version: STATS_VERSION, events: [], names: {} };
     }
 
-    private async persist(): Promise<void> {
-        if (!this.cache) return;
-        await this.vfs.mkdir(STATS_DIR);
-        const enc = encode(this.cache, { ignoreUndefined: true });
-        await this.vfs.writeFile(STATS_PATH, Buffer.from(enc.buffer, enc.byteOffset, enc.byteLength));
+    private persist(): Promise<void> {
+        const run = async () => {
+            if (!this.cache) return;
+            await this.vfs.mkdir(STATS_DIR);
+            const enc = encode(this.cache, { ignoreUndefined: true });
+            await this.vfs.writeFile(STATS_PATH, Buffer.from(enc.buffer, enc.byteOffset, enc.byteLength));
+        };
+        const next = this.writing.then(run, run);
+        this.writing = next.catch(() => {});
+        return next;
     }
 
     async record(event: ZetaEvent, name?: SongName): Promise<void> {

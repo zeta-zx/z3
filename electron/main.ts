@@ -9,8 +9,20 @@ import { exposeIPC } from '@ephaptic/server/electron';
 
 import { routes } from './routes';
 import { initMpris, shutdownMpris, type MprisCommand } from './lib/mpris';
+import { callBackend, startBackend, stopBackend } from './lib/backend';
+import { coverIdFromUrl } from '../src/lib/covers';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// Dev/testing hooks: run an isolated profile (own config + library) and expose
+// the DevTools protocol for automated screenshots.
+if (process.env.ZETA_USER_DATA) app.setPath('userData', process.env.ZETA_USER_DATA);
+if (process.env.ZETA_REMOTE_DEBUG_PORT) app.commandLine.appendSwitch('remote-debugging-port', process.env.ZETA_REMOTE_DEBUG_PORT);
+// Extra Chromium switches, e.g. "ozone-platform=x11,use-angle=swiftshader".
+for (const entry of (process.env.ZETA_CHROMIUM_SWITCHES ?? '').split(',').filter(Boolean)) {
+	const [name, ...value] = entry.split('=');
+	app.commandLine.appendSwitch(name.trim(), value.join('=').trim() || undefined);
+}
 
 // On Linux we publish our own org.mpris.MediaPlayer2.zeta service (see
 // lib/mpris.ts), so Chromium's MediaSession -> MPRIS bridge must be suppressed
@@ -21,7 +33,10 @@ if (process.platform === 'linux') {
 }
 
 protocol.registerSchemesAsPrivileged([
-	{ scheme: 'zeta-app', privileges: { standard: true, secure: true, supportFetchAPI: true } }
+	{ scheme: 'zeta-app', privileges: { standard: true, secure: true, supportFetchAPI: true } },
+	// Embedded cover art, served on demand (see src/lib/covers.ts). CORS-enabled
+	// so the renderer can sample covers for colours and WebGL textures.
+	{ scheme: 'zeta-cover', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
 ])
 
 function createWindow() {
@@ -59,6 +74,23 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+	// Spin the backend up first so it's warm by the time the UI asks for data.
+	startBackend();
+
+	protocol.handle('zeta-cover', async (request) => {
+		const cover = await callBackend<{ data: Uint8Array; mimetype: string } | null>('musicCover', [
+			coverIdFromUrl(request.url),
+		]).catch(() => null);
+		if (!cover) return new Response(null, { status: 404 });
+		return new Response(new Uint8Array(cover.data), {
+			headers: {
+				'Content-Type': cover.mimetype,
+				'Cache-Control': 'public, max-age=31536000, immutable',
+				'Access-Control-Allow-Origin': '*',
+			},
+		});
+	});
+
 	protocol.handle('zeta-app', (request) => {
 		const url = new URL(request.url);
 
@@ -106,6 +138,9 @@ app.on('window-all-closed', () => {
 });
 
 // Release the MPRIS bus name cleanly so the desktop drops our entry.
-app.on('before-quit', () => shutdownMpris());
+app.on('before-quit', () => {
+	shutdownMpris();
+	stopBackend();
+});
 
 export type Routes = typeof routes;

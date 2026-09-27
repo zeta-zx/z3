@@ -1,183 +1,288 @@
 <script lang="ts">
     import Icon from "$lib/components/Icon.svelte";
+    import Cover from "$lib/components/Cover.svelte";
     import { statsState } from "$lib/state/stats.svelte";
-    import { formatTime, createPlaceholderUrl, formatDate } from "$lib/utils";
+    import { playTrack } from "$lib/state/player.svelte";
+    import { formatDate, formatLongDuration } from "$lib/utils";
+    import type { Song } from "$lib/schema";
 
-    // Load whenever the page mounts so freshly-recorded plays show up.
     $effect(() => {
         statsState.load();
     });
 
-    const dur = (ms: number) => formatTime((ms || 0) / 1000);
-    const cover = (url: string | undefined, title: string) =>
-        url || createPlaceholderUrl({ height: 64, text: title });
-
     let s = $derived(statsState.summary);
+    const maxSong = $derived(Math.max(1, ...(s?.topSongs.map((x) => x.playTimeMs) ?? [1])));
+    const maxArtist = $derived(Math.max(1, ...(s?.topArtists.map((x) => x.playTimeMs) ?? [1])));
+    const hours = $derived(((s?.totals.totalPlayTimeMs ?? 0) / 3_600_000).toFixed(1));
+
+    const play = (x: { id: string; title: string; artists: string[]; thumbnailUrl?: string }) =>
+        playTrack({
+            id: x.id,
+            title: x.title,
+            artists: x.artists.map((name) => ({ name, thumbnails: [] })),
+            thumbnails: x.thumbnailUrl ? [{ url: x.thumbnailUrl }] : [],
+            album: null,
+            duration: 0,
+            isDownloaded: false,
+        } satisfies Song);
 </script>
 
-<h2><Icon name="chart-no-axes-column" /> Listening stats</h2>
+<div class="page">
+    <header class="head">
+        <h1 class="page-title">Your listening</h1>
+        <p class="muted">Everything you've played in Zeta (and imported from Muzza).</p>
+    </header>
 
-{#if statsState.loading && !s}
-    <p aria-busy="true">Crunching your listening history…</p>
-{:else if s}
-    <div class="totals">
-        <div class="stat-card">
-            <strong>{dur(s.totals.totalPlayTimeMs)}</strong>
-            <small>Total listening time</small>
+    {#if statsState.loading && !s}
+        <div class="totals">{#each Array(3) as _}<div class="skeleton" style="height:112px"></div>{/each}</div>
+    {:else if s}
+        <div class="totals">
+            <div class="stat">
+                <Icon name="headphones" />
+                <strong>{hours}<small>hrs</small></strong>
+                <span>Listening time</span>
+            </div>
+            <div class="stat">
+                <Icon name="play" />
+                <strong>{s.totals.totalPlays.toLocaleString()}</strong>
+                <span>Plays</span>
+            </div>
+            <div class="stat">
+                <Icon name="music-4" />
+                <strong>{s.totals.uniqueSongs.toLocaleString()}</strong>
+                <span>Different songs</span>
+            </div>
         </div>
-        <div class="stat-card">
-            <strong>{s.totals.totalPlays}</strong>
-            <small>Plays</small>
-        </div>
-        <div class="stat-card">
-            <strong>{s.totals.uniqueSongs}</strong>
-            <small>Unique songs</small>
-        </div>
-    </div>
 
-    {#if s.totals.totalPlays === 0}
-        <p><small>No plays yet. Listen to some music (or import a Muzza backup) and it'll show up here.</small></p>
+        {#if s.totals.totalPlays === 0}
+            <div class="empty"><Icon name="chart-no-axes-column" /><h3>No plays yet</h3><p>Listen to some music and your stats will appear here.</p></div>
+        {:else}
+            <div class="grid">
+                <section class="card panel">
+                    <h2 class="section-title">Top songs</h2>
+                    <ol class="ranks">
+                        {#each s.topSongs.slice(0, 15) as song, i (song.id)}
+                            <li>
+                                <button class="rank-row" onclick={() => play(song)}>
+                                    <span class="pos" class:podium={i < 3}>{i + 1}</span>
+                                    <Cover src={song.thumbnailUrl} title={song.title} size={42} radius="var(--r-xs)" />
+                                    <span class="info">
+                                        <span class="t ellipsis">{song.title}</span>
+                                        <span class="bar"><i style:width="{(song.playTimeMs / maxSong) * 100}%" style:animation-delay="{i * 40}ms"></i></span>
+                                    </span>
+                                    <span class="meta">
+                                        <span>{formatLongDuration(song.playTimeMs / 1000)}</span>
+                                        <small>{song.plays} play{song.plays === 1 ? "" : "s"}</small>
+                                    </span>
+                                </button>
+                            </li>
+                        {/each}
+                    </ol>
+                </section>
+
+                <section class="card panel">
+                    <h2 class="section-title">Top artists</h2>
+                    <ol class="ranks">
+                        {#each s.topArtists.slice(0, 15) as artist, i (artist.name)}
+                            <li class="rank-row static">
+                                <span class="pos" class:podium={i < 3}>{i + 1}</span>
+                                <Cover src={artist.thumbnailUrl} title={artist.name} size={42} radius="50%" />
+                                <span class="info">
+                                    <span class="t ellipsis">{artist.name}</span>
+                                    <span class="bar"><i style:width="{(artist.playTimeMs / maxArtist) * 100}%" style:animation-delay="{i * 40}ms"></i></span>
+                                </span>
+                                <span class="meta">
+                                    <span>{formatLongDuration(artist.playTimeMs / 1000)}</span>
+                                    <small>{artist.plays} play{artist.plays === 1 ? "" : "s"}</small>
+                                </span>
+                            </li>
+                        {/each}
+                    </ol>
+                </section>
+
+                <section class="card panel wide">
+                    <h2 class="section-title">Recently played</h2>
+                    <div class="history">
+                        {#each s.history as ev, i (ev.timestamp + ev.id + i)}
+                            <button class="rank-row" onclick={() => play(ev)}>
+                                <Cover src={ev.thumbnailUrl} title={ev.title} size={40} radius="var(--r-xs)" />
+                                <span class="info">
+                                    <span class="t ellipsis">{ev.title}</span>
+                                    <span class="subtle ellipsis a">{ev.artists.join(", ")}</span>
+                                </span>
+                                <span class="meta">
+                                    <small>{formatDate(ev.timestamp)}</small>
+                                </span>
+                            </button>
+                        {/each}
+                    </div>
+                </section>
+            </div>
+        {/if}
     {/if}
-
-    <div class="stats-grid">
-        <section>
-            <h4><Icon name="music" /> Most played songs</h4>
-            {#if s.topSongs.length === 0}
-                <p><small>Nothing yet.</small></p>
-            {:else}
-                <ol class="rank-list">
-                    {#each s.topSongs as song (song.id)}
-                        <li>
-                            <img src={cover(song.thumbnailUrl, song.title)} alt="" referrerPolicy="no-referrer" />
-                            <div class="rank-info">
-                                <strong title={song.title}>{song.title}</strong>
-                                <small>{song.artists.join(", ")}</small>
-                            </div>
-                            <div class="rank-meta">
-                                <span>{dur(song.playTimeMs)}</span>
-                                <small>{song.plays} play{song.plays === 1 ? "" : "s"}</small>
-                            </div>
-                        </li>
-                    {/each}
-                </ol>
-            {/if}
-        </section>
-
-        <section>
-            <h4><Icon name="user" /> Top artists</h4>
-            {#if s.topArtists.length === 0}
-                <p><small>Nothing yet.</small></p>
-            {:else}
-                <ol class="rank-list">
-                    {#each s.topArtists as artist (artist.name)}
-                        <li>
-                            <div class="rank-info">
-                                <strong title={artist.name}>{artist.name}</strong>
-                            </div>
-                            <div class="rank-meta">
-                                <span>{dur(artist.playTimeMs)}</span>
-                                <small>{artist.plays} play{artist.plays === 1 ? "" : "s"}</small>
-                            </div>
-                        </li>
-                    {/each}
-                </ol>
-            {/if}
-        </section>
-
-        <section class="history-section">
-            <h4><Icon name="history" /> Recent history</h4>
-            {#if s.history.length === 0}
-                <p><small>Nothing yet.</small></p>
-            {:else}
-                <ul class="rank-list">
-                    {#each s.history as ev, i (ev.timestamp + ev.id + i)}
-                        <li>
-                            <img src={cover(ev.thumbnailUrl, ev.title)} alt="" referrerPolicy="no-referrer" />
-                            <div class="rank-info">
-                                <strong title={ev.title}>{ev.title}</strong>
-                                <small>{ev.artists.join(", ")}</small>
-                            </div>
-                            <div class="rank-meta">
-                                <small>{formatDate(ev.timestamp)}</small>
-                                <small>{dur(ev.playTimeMs)}</small>
-                            </div>
-                        </li>
-                    {/each}
-                </ul>
-            {/if}
-        </section>
-    </div>
-{/if}
+</div>
 
 <style>
-    .totals {
-        display: flex;
-        gap: 0.75rem;
-        flex-wrap: wrap;
-        margin-bottom: 1.5rem;
+    .head {
+        padding: 20px 0 22px;
     }
-    .stat-card {
-        flex: 1;
-        min-width: 8rem;
-        background: var(--pico-card-background-color, #1c1c1e);
-        border: 1px solid var(--pico-muted-border-color, #333);
-        border-radius: var(--pico-border-radius, 0.5rem);
-        padding: 0.9rem 1rem;
+    .head p {
+        margin-top: 6px;
+    }
+    .totals {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 14px;
+    }
+    .stat {
+        position: relative;
         display: flex;
         flex-direction: column;
-        gap: 0.25rem;
+        gap: 2px;
+        padding: 20px 22px;
+        border-radius: var(--r-xl);
+        background: linear-gradient(140deg, color-mix(in srgb, var(--accent) 16%, transparent), rgb(255 255 255 / 0.03));
+        border: 1px solid var(--border);
+        overflow: hidden;
+        animation: rise 0.5s var(--ease-out) both;
     }
-    .stat-card strong {
-        font-size: 1.4rem;
+    .stat:nth-child(2) {
+        animation-delay: 60ms;
     }
-    .stats-grid {
+    .stat:nth-child(3) {
+        animation-delay: 120ms;
+    }
+    @keyframes rise {
+        from {
+            opacity: 0;
+            transform: translateY(10px);
+        }
+    }
+    .stat > :global(svg) {
+        position: absolute;
+        right: 18px;
+        top: 18px;
+        width: 22px;
+        height: 22px;
+        color: var(--accent);
+        opacity: 0.8;
+    }
+    .stat strong {
+        font-family: var(--font-display);
+        font-size: 38px;
+        font-weight: 850;
+        letter-spacing: -0.04em;
+    }
+    .stat strong small {
+        font-size: 16px;
+        margin-left: 4px;
+        color: var(--text-2);
+        font-weight: 700;
+    }
+    .stat span {
+        color: var(--text-2);
+        font-weight: 550;
+    }
+    .grid {
         display: grid;
         grid-template-columns: 1fr 1fr;
-        gap: 1.5rem;
+        gap: 16px;
+        margin-top: 16px;
     }
-    .history-section {
+    .panel {
+        padding: 20px 14px 14px;
+        min-width: 0;
+    }
+    .panel .section-title {
+        padding: 0 8px 12px;
+    }
+    .wide {
         grid-column: 1 / -1;
     }
-    .rank-list {
+    .ranks {
         list-style: none;
-        padding: 0;
         margin: 0;
-        display: flex;
-        flex-direction: column;
-        gap: 0.4rem;
+        padding: 0;
     }
-    .rank-list li {
+    .rank-row {
         display: flex;
         align-items: center;
-        gap: 0.6rem;
+        gap: 12px;
+        width: 100%;
+        padding: 7px 8px;
+        border-radius: var(--r-sm);
+        text-align: left;
+        transition: background 0.18s;
     }
-    .rank-list img {
-        width: 40px;
-        height: 40px;
-        border-radius: 4px;
-        object-fit: cover;
-        flex-shrink: 0;
+    button.rank-row:hover {
+        background: var(--surface-2);
     }
-    .rank-info {
+    .pos {
+        width: 22px;
+        text-align: center;
+        font-weight: 700;
+        color: var(--text-3);
+        font-variant-numeric: tabular-nums;
+    }
+    .pos.podium {
+        color: var(--accent);
+    }
+    .info {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
         flex: 1;
         min-width: 0;
-        display: flex;
-        flex-direction: column;
     }
-    .rank-info strong,
-    .rank-info small {
+    .t {
+        font-weight: 600;
+    }
+    .a {
+        font-size: 12.5px;
+        margin-top: -4px;
+    }
+    .bar {
+        height: 4px;
+        border-radius: 4px;
+        background: var(--surface-2);
         overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
     }
-    .rank-meta {
-        text-align: right;
+    .bar i {
+        display: block;
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 70%, transparent), var(--accent));
+        transform-origin: left;
+        animation: grow 0.9s var(--ease-out) both;
+    }
+    @keyframes grow {
+        from {
+            transform: scaleX(0);
+        }
+    }
+    .meta {
         display: flex;
         flex-direction: column;
+        align-items: flex-end;
+        font-size: 13px;
+        font-weight: 600;
         flex-shrink: 0;
     }
-    @media (max-width: 800px) {
-        .stats-grid {
+    .meta small {
+        color: var(--text-3);
+        font-weight: 500;
+        font-size: 12px;
+    }
+    .history {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+        gap: 2px 16px;
+    }
+    @media (max-width: 960px) {
+        .grid {
+            grid-template-columns: 1fr;
+        }
+        .totals {
             grid-template-columns: 1fr;
         }
     }

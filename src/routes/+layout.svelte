@@ -10,14 +10,6 @@
 	<link rel="icon" href="/zeta.png" />
 </svelte:head>
 
-<main class="container">
-	{@render children()}
-</main>
+{@render children()}
 
 <Toaster />
-
-<footer>
-	<small>
-	<p>© 2025 uukelele</p>
-	</small>
-</footer>

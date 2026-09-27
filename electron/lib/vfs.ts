@@ -51,11 +51,13 @@ export interface VFS {
 
 /** Normalise a relative path into clean POSIX segments. */
 function posixNormalise(p: string): string {
-    return p
+    const segments = p
         .replace(/\\/g, '/')
         .split('/')
-        .filter((seg) => seg && seg !== '.')
-        .join('/');
+        .filter((seg) => seg && seg !== '.');
+    // Every path is relative to the music directory; never let one escape it.
+    if (segments.includes('..')) throw new Error(`Invalid path outside the music directory: ${p}`);
+    return segments.join('/');
 }
 
 function posixJoin(base: string, rel: string): string {
@@ -358,8 +360,11 @@ class FtpVFS implements VFS {
         try {
             const entries = await this.readdir(dir);
             return entries.some((e) => e.name === name);
-        } catch {
-            return false;
+        } catch (err: any) {
+            // 550 = "no such file or directory". Anything else (dropped
+            // connection, auth…) must not masquerade as a missing file.
+            if (err?.code === 550 || /\b550\b|no such file|not found/i.test(String(err?.message))) return false;
+            throw err;
         }
     }
 

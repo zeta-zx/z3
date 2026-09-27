@@ -1,4 +1,5 @@
 import type { Thumbnail } from "./schema";
+import { isCoverUrl } from "./covers";
 
 export function toTitleCase(str: string): string {
     return str
@@ -12,10 +13,35 @@ export function randomChoice<T>(arr: T[]): T {
     return arr[Math.floor(Math.random() * arr.length)];
 }
 
-export type LrcLine = {
+export type LrcWord = {
     time: number;
     text: string;
 };
+
+export type LrcLine = {
+    time: number;
+    text: string;
+    /** Per-word timings, when the source is "enhanced" LRC (`<mm:ss.xx>word`). */
+    words?: LrcWord[];
+};
+
+const stampToSeconds = (m: string, s: string, ms?: string) =>
+    (+m) * 60 + (+s) + (ms ? +ms.padEnd(3, '0') / 1000 : 0);
+
+/** Split an enhanced-LRC line body into timed words; undefined when it has none. */
+function parseWords(body: string): LrcWord[] | undefined {
+    const re = /<(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?>/g;
+    const marks = [...body.matchAll(re)];
+    if (!marks.length) return undefined;
+    const words: LrcWord[] = [];
+    marks.forEach((mark, i) => {
+        const start = mark.index! + mark[0].length;
+        const end = i + 1 < marks.length ? marks[i + 1].index! : body.length;
+        const text = body.slice(start, end);
+        if (text.trim()) words.push({ time: stampToSeconds(mark[1], mark[2], mark[3]), text });
+    });
+    return words.length ? words : undefined;
+}
 
 export function parseLrc(lrcText: string | null): LrcLine[] {
     if (!lrcText) return [];
@@ -23,19 +49,67 @@ export function parseLrc(lrcText: string | null): LrcLine[] {
     return lrcText
         .trim()
         .split('\n')
-        .map(line => {
-            const match = line.match(/\[(\d{2}):(\d{2})\.(\d{2,3})\](.*)/);
-            if (!match) return null;
+        .flatMap(line => {
+            // A line may carry multiple timestamps, e.g. "[00:12.00][01:04.00]text".
+            const stamps = [...line.matchAll(/\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]/g)];
+            if (!stamps.length) return [];
 
-            const [, m, s, ms, text] = match;
-
-            return {
-                time: (+m) * 60 + (+s) + (+ms.padEnd(3, '0')) / 1000,
-                text: text.trim() || '♪'
-            };
+            const body = line.replace(/\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]/g, '');
+            const words = parseWords(body);
+            const text = body.replace(/<\d{1,2}:\d{2}(?:[.:]\d{1,3})?>/g, '').replace(/\s+/g, ' ').trim() || '♪';
+            return stamps.map(([, m, s, ms]) => ({
+                time: stampToSeconds(m, s, ms),
+                text,
+                ...(words && stamps.length === 1 ? { words } : {}),
+            }));
         })
-        .filter((line): line is { time: number; text: string } => line !== null)
         .sort((a, b) => a.time - b.time);
+}
+
+/** Plain lyrics as display lines (section tags like `[Chorus]` removed). */
+export function plainLyricLines(raw: string | null): string[] {
+    if (!raw) return [];
+    return raw
+        .split('\n')
+        .map(l => l.replace(/^\[[^\]]*\]\s*/, '').trim())
+        .filter(l => l.length > 0);
+}
+
+/** True when the text contains LRC-style `[mm:ss]` timestamps. */
+export function isSyncedLyrics(text: string | null): boolean {
+    return !!text && /\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]/.test(text);
+}
+
+/**
+ * Turn raw lyrics text into display lines for the ticker.
+ *
+ * - Time-synced (LRC) lyrics are parsed as-is.
+ * - Plain lyrics (no timestamps) are spread evenly across `durationSec`, so the
+ *   ticker still scrolls through them roughly in time with the song instead of
+ *   showing nothing. lrclib and other sources only have plain lyrics for a large
+ *   share of tracks, so this is the difference between "No lyrics available" and
+ *   actually seeing them.
+ *
+ * Returns `[]` only when there is no usable text at all.
+ */
+export function buildLyricLines(raw: string | null, durationSec: number): LrcLine[] {
+    if (!raw) return [];
+
+    const synced = parseLrc(raw);
+    if (synced.length) return synced;
+
+    const lines = raw
+        .split('\n')
+        .map(l => l.replace(/^\[[^\]]*\]\s*/, '').trim())
+        .filter(l => l.length > 0);
+    if (!lines.length) return [];
+
+    // Fall back to a rough ~4s/line when the real duration isn't known yet
+    // (audio metadata not loaded); the ticker recomputes once it is.
+    const total = durationSec && isFinite(durationSec) && durationSec > 0 ? durationSec : lines.length * 4;
+    const intro = Math.min(2, total * 0.02);
+    const step = (total - intro) / lines.length;
+    return lines.map((text, i) => ({ time: intro + i * step, text }));
 }
 
 export function formatTime(seconds: number) {
@@ -116,33 +190,92 @@ export interface PlaceholderOpts {
 
 }
 
-export function createPlaceholderUrl(opts: PlaceholderOpts = {}): string {
-    const {
-        width = 64,
-        height = 64,
-        format = 'svg',
-        backgroundColor = null,
-        textColor = null,
-        text = null,
-        font = Font.Lato,
-    } = opts;
-
-    let url = 'https://placehold.co';
-
-    url += `/${width.toString()}x${height.toString()}`;
-
-    if (backgroundColor && textColor) { // if only one specified, ignore
-        url += `/${backgroundColor}/${textColor}`;
+function hashString(str: string): number {
+    let h = 2166136261;
+    for (let i = 0; i < str.length; i++) {
+        h ^= str.charCodeAt(i);
+        h = Math.imul(h, 16777619);
     }
+    return h >>> 0;
+}
 
-    url += `.${format}`;
+const placeholderCache = new Map<string, string>();
 
-    const urlObj = new URL(url);
+/**
+ * A generated cover: a gradient seeded by the text, with its initial. Built
+ * locally as an SVG data URI so it works offline (previously placehold.co).
+ */
+export function createPlaceholderUrl(opts: PlaceholderOpts = {}): string {
+    const text = (opts.text ?? '').trim();
+    const key = text;
+    const cached = placeholderCache.get(key);
+    if (cached) return cached;
 
-    if (text) urlObj.searchParams.append('text', text);
-    if (font) urlObj.searchParams.append('font', font);
+    const h = hashString(text || 'zeta');
+    const hue1 = h % 360;
+    const hue2 = (hue1 + 40 + ((h >> 9) % 80)) % 360;
+    const initial = text === '+' ? '+' : ([...text.replace(/^[^\p{L}\p{N}]+/u, '')][0] ?? '♪').toUpperCase();
+    const escaped = initial.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
-    return urlObj.toString();
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">` +
+        `<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">` +
+        `<stop offset="0" stop-color="hsl(${hue1} 62% 46%)"/><stop offset="1" stop-color="hsl(${hue2} 70% 22%)"/>` +
+        `</linearGradient><radialGradient id="r" cx="0.25" cy="0.2" r="0.9">` +
+        `<stop offset="0" stop-color="#fff" stop-opacity=".28"/><stop offset=".6" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>` +
+        `<rect width="100" height="100" fill="url(#g)"/><rect width="100" height="100" fill="url(#r)"/>` +
+        `<text x="50" y="50" dy=".35em" text-anchor="middle" font-family="Plus Jakarta Sans Variable, Inter Variable, system-ui, sans-serif" ` +
+        `font-weight="700" font-size="42" fill="#fff" fill-opacity=".92">${escaped}</text></svg>`;
+
+    const url = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+    placeholderCache.set(key, url);
+    return url;
+}
+
+/** "1 hr 12 min" / "42 min" / "3 min 10 sec" style total duration. */
+export function formatLongDuration(seconds: number): string {
+    if (!isFinite(seconds) || seconds <= 0) return '0 min';
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    if (h) return `${h} hr ${m} min`;
+    if (m >= 10) return `${m} min`;
+    const s = Math.floor(seconds % 60);
+    return m ? `${m} min ${s} sec` : `${s} sec`;
+}
+
+/**
+ * A plain copy of a song without embedded cover bytes, for backend calls that
+ * only need to identify it (lyrics, radio). Keeps IPC messages tiny.
+ */
+export function slimSong<T extends { thumbnails: Thumbnail[] }>(song: T): T {
+    return {
+        ...song,
+        thumbnails: song.thumbnails.filter((t) => t.url).map(({ url, width, height }) => ({ url, width, height })),
+    };
+}
+
+/**
+ * The square region of a cover image worth looking at. Covers are cropped to
+ * their centre square; YouTube's 4:3 "hqdefault" frames additionally have
+ * black bars baked in above/below a 16:9 picture, which are excluded.
+ */
+export function coverCrop(width: number, height: number): { sx: number; sy: number; side: number } {
+    let h = height;
+    if (Math.abs(width / height - 4 / 3) < 0.02 && width <= 640) h = (width * 9) / 16;
+    const side = Math.min(width, h);
+    return { sx: (width - side) / 2, sy: (height - side) / 2, side };
+}
+
+/**
+ * Identity for "the same song" across different uploads/ids:
+ * "title|first artist", ignoring "(feat. …)", "[Remastered]" and the like.
+ */
+export function songKey(t: { title: string; artists: { name: string }[] }): string {
+    const title = t.title.toLowerCase().replace(/\(.*?\)|\[.*?\]/g, "").replace(/\s+/g, " ").trim();
+    return `${title}|${(t.artists[0]?.name ?? "").toLowerCase().trim()}`;
+}
+
+export function artistNames(song: { artists: { name: string }[] } | null | undefined): string {
+    return song?.artists.map((a) => a.name).filter(Boolean).join(', ') || 'Unknown artist';
 }
 
 export function shuffle<T>(arr: T[]): T[] {
@@ -197,9 +330,15 @@ function dataThumbnailUrl(data: Uint8Array, mimetype: string): string {
 }
 
 export function getThumbnailUrl(thumbnails?: Thumbnail[], fallbackTitle: string = "N/A") {
-    let thumbnail = (thumbnails || []).toSorted((a, b) => (a.height ?? 0) - (b.height ?? 0)).at(-1);
+    // The embedded cover (served on demand) works offline: prefer it.
+    const local = thumbnails?.find((t) => isCoverUrl(t.url));
+    if (local?.url) return local.url;
+    const sorted = (thumbnails || []).toSorted((a, b) => (a.height ?? 0) - (b.height ?? 0));
+    // Then embedded bytes (search results played from tags), then remote URLs.
+    const withData = sorted.findLast((t) => t.data?.length);
+    if (withData?.data) return dataThumbnailUrl(withData.data, withData.mimetype || 'image/jpeg');
+    const thumbnail = sorted.findLast((t) => t.url);
     if (thumbnail?.url) return updateThumbnailUrl(thumbnail.url);
-    if (thumbnail?.data && thumbnail?.mimetype) return dataThumbnailUrl(thumbnail.data, thumbnail.mimetype);
     return createPlaceholderUrl({
         height: 64,
         text: fallbackTitle,
