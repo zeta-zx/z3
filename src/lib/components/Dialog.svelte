@@ -13,6 +13,17 @@
         queueMicrotask(() => input?.select());
     });
 
+    $effect(() => {
+        if (!ui.dialog) return;
+        const onKeydown = (event: KeyboardEvent) => {
+            if (event.key !== "Escape") return;
+            event.stopPropagation();
+            close(null);
+        };
+        window.addEventListener("keydown", onKeydown);
+        return () => window.removeEventListener("keydown", onKeydown);
+    });
+
     function close(result: string | boolean | null) {
         const d = ui.dialog;
         ui.dialog = null;
@@ -36,7 +47,6 @@
             class="dialog glass"
             use:liquidGlass={{ enabled: ui.liquidGlass, depth: 12, blur: 12 }}
             onsubmit={submit}
-            onkeydown={(e) => e.key === "Escape" && (e.stopPropagation(), close(null))}
             transition:scale={{ start: 0.92, duration: 260, opacity: 0 }}
         >
             <h3>{d.title}</h3>

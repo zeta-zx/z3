@@ -102,7 +102,6 @@
         {@const i = offset + j}
         {@const current = isCurrent(track)}
         {@const fav = libraryState.isFavourite(track.id)}
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
         <div
             class="row track"
             class:current
@@ -111,12 +110,6 @@
             class:drop-below={dragOver === i && dragFrom !== null && dragFrom < i}
             role="listitem"
             draggable={reorderable}
-            ondblclick={() => play(i, track)}
-            onclick={(e) => {
-                // Single click plays too, unless it landed on a control or link.
-                if (!(e.target as HTMLElement).closest("button, a")) play(i, track);
-            }}
-            oncontextmenu={(e) => ui.openMenu(e, trackMenu(track, { playlist }))}
             ondragstart={(e) => {
                 dragFrom = i;
                 e.dataTransfer!.effectAllowed = "move";
@@ -145,9 +138,16 @@
             </span>
 
             <span class="title-cell">
-                <Cover thumbnails={track.thumbnails} title={track.title} size={42} radius="var(--r-xs)" />
+                <button class="cover-play" aria-label="Play {track.title}" onclick={() => play(i, track)}>
+                    <Cover thumbnails={track.thumbnails} title={track.title} size={42} radius="var(--r-xs)" />
+                </button>
                 <span class="title-text">
-                    <span class="title ellipsis" title={track.title}>{track.title}</span>
+                    <button
+                        class="title ellipsis"
+                        title={track.title}
+                        onclick={() => play(i, track)}
+                        oncontextmenu={(e) => ui.openMenu(e, trackMenu(track, { playlist }))}
+                    >{track.title}</button>
                     <span class="artist ellipsis">
                         {#if track.isDownloaded}<span class="dl" title="Downloaded"><Icon name="circle-arrow-down" /></span>{/if}
                         <ArtistLinks
@@ -299,15 +299,28 @@
     .title-cell :global(.cover) {
         border-radius: 12px !important;
     }
+    .cover-play {
+        display: flex;
+        flex: 0 0 auto;
+        border-radius: 12px;
+    }
     .title-text {
         display: flex;
         flex-direction: column;
         min-width: 0;
     }
     .title {
+        display: block;
+        width: 100%;
         font-weight: 550;
         font-size: 14.5px;
         color: var(--text);
+        text-align: left;
+    }
+    .cover-play:focus-visible,
+    .title:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
     }
     .current .title {
         color: var(--accent);

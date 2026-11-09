@@ -32,7 +32,6 @@
 </script>
 
 {#snippet row(song: Song, onplay: () => void, extra?: { remove?: () => void; index?: number })}
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
         class="q-row"
         role="listitem"
@@ -49,12 +48,17 @@
             if (dragFrom !== null && dragOver !== null && dragFrom !== dragOver) moveInQueue(dragFrom, dragOver);
             dragFrom = dragOver = null;
         }}
-        onclick={(e) => !(e.target as HTMLElement).closest("button, a") && onplay()}
-        oncontextmenu={(e) => ui.openMenu(e, trackMenu(song))}
     >
-        <Cover thumbnails={song.thumbnails} title={song.title} size={42} radius="var(--r-xs)" />
+        <button class="q-cover" aria-label="Play {song.title}" onclick={onplay}>
+            <Cover thumbnails={song.thumbnails} title={song.title} size={42} radius="var(--r-xs)" />
+        </button>
         <span class="q-text">
-            <span class="q-title ellipsis">{song.title}</span>
+            <button
+                class="q-title ellipsis"
+                title={song.title}
+                onclick={onplay}
+                oncontextmenu={(e) => ui.openMenu(e, trackMenu(song))}
+            >{song.title}</button>
             <span class="q-artist ellipsis"><ArtistLinks artists={song.artists} providerHint={song.id.startsWith("js:") ? "js" : "yt"} /></span>
         </span>
         {#if extra?.remove}
@@ -283,8 +287,21 @@
         min-width: 0;
     }
     .q-title {
+        display: block;
+        width: 100%;
         font-weight: 550;
         font-size: 13.5px;
+        text-align: left;
+    }
+    .q-cover {
+        display: flex;
+        flex: 0 0 auto;
+        border-radius: var(--r-xs);
+    }
+    .q-cover:focus-visible,
+    .q-title:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
     }
     .q-artist {
         font-size: 12.5px;
