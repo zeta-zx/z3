@@ -13,6 +13,10 @@ npm run dev
 
 `npm run build` builds the Electron app and `npm run dist` packages it.
 
+Desktop includes music search and discovery, playlists, favourites, queue-based
+autoplay and radio, lyrics, visualizers, and a video mode for matching music
+videos. Playback can use the supported music providers or your own local library.
+
 ## Android
 
 Android runs independently of the desktop app. The Svelte interface is bundled with
