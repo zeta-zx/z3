@@ -173,7 +173,7 @@ class SettingsStore {
             } catch (error) {
                 if (!includeAudio || !String(error).includes(BACKUP_AUDIO_LIMIT_MESSAGE)) throw error;
                 const saveLibrary = await ui.confirm('Save a library-only backup?', {
-                    message: 'The offline audio exceeds 128 MiB. You can still save your songs, playlists, favourites, and listening history.',
+                    message: 'The offline audio exceeds 512 MiB. You can still save your songs, playlists, favourites, and listening history.',
                     confirmLabel: 'Save library backup',
                 });
                 if (!saveLibrary) return;

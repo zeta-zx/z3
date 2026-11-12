@@ -4,6 +4,7 @@
     import Slider from "$lib/components/Slider.svelte";
     import LyricsView from "$lib/components/LyricsView.svelte";
     import ShaderCanvas from "$lib/components/ShaderCanvas.svelte";
+    import MusicVideoPlayer from "$lib/components/MusicVideoPlayer.svelte";
     import ArtistLinks from "$lib/components/ArtistLinks.svelte";
     import {
         playerState,
@@ -30,7 +31,6 @@
     import { tilt } from "$lib/tilt";
     import { client } from "$lib/ephaptic";
     import type { Song } from "$lib/schema";
-    import { isAndroid } from "$lib/platform";
 
     const track = $derived(playerState.currentTrack);
     const fav = $derived(track ? libraryState.isFavourite(track.id) : false);
@@ -43,7 +43,8 @@
     let videoError = $state("");
     let videoRequest = 0;
     let requestedVideoTrack = $state("");
-    let videoWasPlaying = false;
+    let videoEntryTime = $state(0);
+    let videoEntryPlaying = $state(true);
     const videoRequested = $derived(mode === "video");
 
     // Hide chrome when the mouse is idle (visualizer mode).
@@ -108,8 +109,12 @@
         try {
             const results = await client.musicSearchVideos(query);
             if (request !== videoRequest || playerState.currentTrack?.id !== current.id) return;
-            videos = results.filter((video) => video.id.startsWith("yt:") && /^[\w-]{11}$/.test(video.id.slice(3)));
-            selectedVideo = bestVideoForTrack(current, videos);
+            const list = results.filter((video) => video.id.startsWith("yt:") && /^[\w-]{11}$/.test(video.id.slice(3)));
+            if (current.id.startsWith("yt:") && /^[\w-]{11}$/.test(current.id.slice(3)) && !list.some((v) => v.id === current.id)) {
+                list.unshift(current);
+            }
+            videos = list;
+            selectedVideo = bestVideoForTrack(current, list) ?? (list[0] ?? null);
         } catch (error) {
             if (request === videoRequest) videoError = error instanceof Error ? error.message : String(error);
         } finally {
@@ -117,23 +122,21 @@
         }
     }
 
+    let prevMode = $state(ui.nowPlayingMode);
     $effect(() => {
-        const requested = videoRequested;
-        const hasVideo = !!selectedVideoId;
-        const loading = videoLoading;
-        const paused = playerState.paused;
-        if (requested && hasVideo && !paused) {
-            videoWasPlaying = true;
-            playerState.paused = true;
-        } else if ((!requested || (!loading && !hasVideo)) && videoWasPlaying) {
-            videoWasPlaying = false;
-            playerState.paused = false;
+        const m = mode;
+        if (m === "video" && prevMode !== "video") {
+            videoEntryTime = playerState.currentTime || 0;
+            videoEntryPlaying = !playerState.paused;
         }
+        prevMode = m;
     });
 
     $effect(() => {
         const current = track;
         if (!videoRequested || !current || requestedVideoTrack === current.id) return;
+        videoEntryTime = playerState.currentTime || 0;
+        videoEntryPlaying = !playerState.paused;
         void loadVideosForTrack(current);
     });
 
@@ -144,12 +147,9 @@
     function selectVideo(video: Song) {
         const videoId = video.id.startsWith("yt:") ? video.id.slice(3) : "";
         if (!/^[\w-]{11}$/.test(videoId)) return;
+        videoEntryTime = playerState.currentTime || 0;
+        videoEntryPlaying = true;
         selectedVideo = video;
-        if (isAndroid) openVideo(videoId);
-    }
-
-    function openVideo(videoId: string) {
-        void client.openMusicVideo(videoId).catch((error) => toasts.error(error));
     }
 
     const selectedVideoId = $derived(
@@ -162,8 +162,8 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
     class="np"
-    class:vis={mode === "visualizer"}
-    class:idle={idle && mode === "visualizer"}
+    class:vis={mode === "visualizer" || mode === "video"}
+    class:idle={idle && (mode === "visualizer" || mode === "video")}
     onmousemove={wake}
     onpointerdown={wake}
     in:fly={{ y: 60, duration: 520, opacity: 0, easing: (t) => 1 - Math.pow(1 - t, 4) }}
@@ -277,56 +277,19 @@
                 </div>
             </div>
         {:else if mode === "video"}
-            <div class="video-stage">
-                <div class="video-content">
-                    {#if selectedVideoId && isAndroid}
-                        <div class="video-state">
-                            <Icon name="film" />
-                            <span>{selectedVideo?.title ?? track.title}</span>
-                            <button class="video-retry" onclick={() => openVideo(selectedVideoId)}>Watch on YouTube</button>
-                        </div>
-                    {:else if selectedVideoId}
-                        <iframe
-                            class="video-frame"
-                            src="https://www.youtube-nocookie.com/embed/{selectedVideoId}?autoplay=1&playsinline=1&rel=0&cc_load_policy=1"
-                            title="{selectedVideo?.title ?? track.title} music video"
-                            allow="autoplay; encrypted-media; picture-in-picture; web-share"
-                            referrerpolicy="strict-origin-when-cross-origin"
-                            allowfullscreen
-                        ></iframe>
-                    {:else if videoLoading}
-                        <div class="video-state"><span class="spin"><Icon name="loader-circle" /></span><span>Finding music videos…</span></div>
-                    {:else if videoError}
-                        <div class="video-state">
-                            <Icon name="triangle-alert" />
-                            <span>{videoError}</span>
-                            <button class="video-retry" onclick={retryVideoSearch}>Try again</button>
-                        </div>
-                    {:else if videos.length}
-                        <div class="video-state"><Icon name="film" /><span>Playing the best match for this song.</span></div>
-                    {:else}
-                        <div class="video-state"><Icon name="film" /><span>No music videos found for this song.</span></div>
-                    {/if}
-                </div>
-                {#if selectedVideoId && !isAndroid}
-                    <button class="video-retry" onclick={() => openVideo(selectedVideoId)}>Open on YouTube</button>
-                {/if}
-                {#if videos.length}
-                    <div class="video-picks" aria-label="More videos for this song">
-                        <span class="video-picks-label">More videos</span>
-                        {#each videos as video (video.id)}
-                            <button class="video-pick" class:selected={selectedVideo?.id === video.id} onclick={() => selectVideo(video)}>
-                                <Cover thumbnails={video.thumbnails} title={video.title} size={64} radius="10px" />
-                                <span class="video-pick-copy">
-                                    <strong class="ellipsis">{video.title}</strong>
-                                    <small class="ellipsis">{video.artists.map((artist) => artist.name).join(", ")}</small>
-                                </span>
-                                <Icon name={selectedVideo?.id === video.id ? "volume-x" : "play"} />
-                            </button>
-                        {/each}
-                    </div>
-                {/if}
-            </div>
+            <MusicVideoPlayer
+                {track}
+                videoId={selectedVideoId}
+                {videos}
+                {selectedVideo}
+                loadingVideos={videoLoading}
+                {videoError}
+                {idle}
+                entryTime={videoEntryTime}
+                entryPlaying={videoEntryPlaying}
+                onselectvideo={selectVideo}
+                onretry={retryVideoSearch}
+            />
         {:else}
             <div class="vis-stage">
                 {#if pack.id === "halo"}
@@ -785,120 +748,6 @@
     }
     .vis-bar .ctl {
         padding: 0;
-    }
-    .video-stage {
-        position: relative;
-        z-index: 1;
-        flex: 1;
-        min-height: 0;
-        width: min(1200px, 100%);
-        margin: 0 auto;
-        padding: 12px clamp(20px, 5vw, 72px) 28px;
-        display: flex;
-        flex-direction: column;
-        gap: 14px;
-    }
-    .video-content {
-        position: relative;
-        flex: 1;
-        min-height: 180px;
-        overflow: hidden;
-        border: 1px solid rgb(255 255 255 / 0.12);
-        border-radius: 22px;
-        background: #050507;
-        box-shadow: 0 30px 70px -30px rgb(0 0 0 / 0.8);
-    }
-    .video-frame {
-        display: block;
-        width: 100%;
-        height: 100%;
-        border: 0;
-    }
-    .video-state {
-        position: absolute;
-        inset: 0;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 12px;
-        padding: 24px;
-        color: rgb(255 255 255 / 0.72);
-        text-align: center;
-    }
-    .video-state :global(svg) {
-        width: 30px;
-        height: 30px;
-        opacity: 0.75;
-    }
-    .video-state .spin :global(svg) {
-        animation: spin 1s linear infinite;
-    }
-    .video-retry {
-        padding: 8px 14px;
-        border: 1px solid rgb(255 255 255 / 0.18);
-        border-radius: 999px;
-        color: #fff;
-        background: rgb(255 255 255 / 0.08);
-    }
-    .video-picks {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        min-height: 80px;
-        overflow-x: auto;
-        padding: 2px 2px 8px;
-    }
-    .video-picks-label {
-        position: sticky;
-        left: 0;
-        z-index: 1;
-        flex: 0 0 auto;
-        padding: 0 8px;
-        color: rgb(255 255 255 / 0.55);
-        font-size: 11px;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        background: linear-gradient(90deg, #0b0910 75%, transparent);
-    }
-    .video-pick {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        width: min(300px, 76vw);
-        min-width: min(300px, 76vw);
-        padding: 8px;
-        border: 1px solid rgb(255 255 255 / 0.08);
-        border-radius: 14px;
-        background: rgb(255 255 255 / 0.05);
-        text-align: left;
-    }
-    .video-pick.selected,
-    .video-pick:hover {
-        border-color: color-mix(in srgb, var(--accent) 65%, transparent);
-        background: color-mix(in srgb, var(--accent) 14%, transparent);
-    }
-    .video-pick-copy {
-        display: flex;
-        flex: 1;
-        flex-direction: column;
-        min-width: 0;
-        gap: 4px;
-    }
-    .video-pick-copy strong {
-        font-size: 12.5px;
-        font-weight: 650;
-    }
-    .video-pick-copy small {
-        color: rgb(255 255 255 / 0.58);
-        font-size: 11px;
-    }
-    .video-pick > :global(svg) {
-        width: 16px;
-        height: 16px;
-        flex-shrink: 0;
-        color: rgb(255 255 255 / 0.65);
     }
     /* The cover sits at the centre of the Halo ring inside its frame. */
     .disc.framed {

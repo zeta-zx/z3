@@ -562,10 +562,21 @@ public class PlaybackService extends MediaLibraryService {
             JSONObject album = song.optJSONObject("album");
             if (album != null) metadata.setAlbumTitle(album.optString("title", ""));
             JSONArray thumbnails = song.optJSONArray("thumbnails");
+            boolean hasArtworkUri = false;
             if (thumbnails != null && thumbnails.length() > 0) {
-                JSONObject thumbnail = thumbnails.optJSONObject(0);
-                String url = thumbnail == null ? "" : thumbnail.optString("url", "");
-                if (url.startsWith("https://")) metadata.setArtworkUri(Uri.parse(url));
+                for (int i = 0; i < thumbnails.length(); i++) {
+                    JSONObject thumbnail = thumbnails.optJSONObject(i);
+                    String url = thumbnail == null ? "" : thumbnail.optString("url", "");
+                    if (url.startsWith("https://")) {
+                        metadata.setArtworkUri(Uri.parse(url));
+                        hasArtworkUri = true;
+                        break;
+                    }
+                }
+            }
+            if (!hasArtworkUri) {
+                File cover = new File(audio.getPath().replaceFirst("\\.[^.]+$", ".cover"));
+                if (cover.isFile()) metadata.setArtworkUri(Uri.fromFile(cover));
             }
             return new MediaItem.Builder()
                 .setMediaId(SONG_PREFIX + id)

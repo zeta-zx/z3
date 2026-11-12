@@ -7,6 +7,7 @@ import { routes as mpris } from './mpris';
 import { callBackend } from '../lib/backend';
 import { updateRoutes } from '../lib/updates';
 import { nearbyRoutes } from '../lib/nearby';
+import { wayshipRoutes } from '../lib/wayship';
 
 import { Client, type SetActivity, type SetActivityResponse } from '@xhayper/discord-rpc';
 
@@ -27,6 +28,7 @@ const MUSIC_ROUTES = [
     'musicSearchPlaylists',
     'musicSearchAlbums',
     'musicSearchVideos',
+    'musicVideoStream',
     'musicArtist',
     'musicArtistSongs',
     'musicCollection',
@@ -130,7 +132,7 @@ const dialogs = {
         });
         const path = picked.filePaths[0];
         if (picked.canceled || !path) return null;
-        if ((await stat(path)).size > MAX_BACKUP_BYTES) throw new Error('The backup exceeds 128 MiB.');
+        if ((await stat(path)).size > MAX_BACKUP_BYTES) throw new Error('The backup exceeds 512 MiB.');
         return new Uint8Array(await readFile(path));
     },
 
@@ -391,6 +393,7 @@ async function appleMusicArtwork(title: string, artists: string[], album?: strin
 export const routes = {
     ...updateRoutes,
     ...nearbyRoutes,
+    ...wayshipRoutes,
     async openScrobblingLink(url: string): Promise<void> {
         const target = new URL(url);
         if (target.protocol !== 'https:' || !['www.last.fm', 'last.fm', 'listenbrainz.org'].includes(target.hostname)) throw new Error('Invalid account connection link.');

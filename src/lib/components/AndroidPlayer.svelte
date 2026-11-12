@@ -3,6 +3,7 @@
     import { onMount, untrack } from 'svelte';
     import { nextTrack, previousTrack } from '$lib/state/player.svelte';
     import { audioEffects } from '$lib/state/audio-effects.svelte';
+    import { androidPreferences } from '$lib/state/android.svelte';
     import type { Song } from '$lib/schema';
 
     interface NativeState { id: string; position: number; duration: number; paused: boolean; ready: boolean; ended: boolean; revision: string }
@@ -15,6 +16,7 @@
         clear(): Promise<void>;
         takeWidgetCommand(): Promise<{ command?: string }>;
         setKeepAwake(options: { enabled: boolean }): Promise<void>;
+        setWidgetTheme(options: { theme: 'artwork' | 'material' }): Promise<void>;
         addListener(name: 'widgetCommand', callback: (event: { command: string }) => void): Promise<PluginListenerHandle>;
         addListener(name: 'state', callback: (state: NativeState) => void): Promise<PluginListenerHandle>;
         addListener(name: 'playbackError', callback: (error: { message: string; id?: string }) => void): Promise<PluginListenerHandle>;
@@ -136,6 +138,9 @@
     });
     $effect(() => {
         if (ready) void native.setKeepAwake({ enabled: !!uri && keepAwake && !paused }).catch(onerror);
+    });
+    $effect(() => {
+        if (ready) void native.setWidgetTheme({ theme: androidPreferences.widgetTheme }).catch(() => {});
     });
     $effect(() => {
         const position = currentTime;

@@ -75,10 +75,49 @@ function randomId(prefix: string): string {
     return s;
 }
 
+function bytesToBase64(bytes: Uint8Array): string {
+    let binary = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    }
+    return btoa(binary);
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+    const binary = atob(b64);
+    const out = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+    return out;
+}
+
 function bestThumbnailUrl(thumbnails: Thumbnail[]): string | null {
-    const withUrl = (thumbnails || []).filter((t) => t.url);
-    if (!withUrl.length) return null;
-    return withUrl.sort((a, b) => (a.width ?? a.height ?? 0) - (b.width ?? b.height ?? 0)).at(-1)!.url!;
+    const remote = (thumbnails || []).filter((t) => t.url && /^https?:\/\//i.test(t.url));
+    if (remote.length) {
+        return remote.sort((a, b) => (a.width ?? a.height ?? 0) - (b.width ?? b.height ?? 0)).at(-1)!.url!;
+    }
+    const dataUri = (thumbnails || []).find((t) => t.url && /^data:image\/(?:jpeg|png|webp|gif|avif);base64,/i.test(t.url));
+    if (dataUri?.url) return dataUri.url;
+    const embedded = (thumbnails || []).find((t) => t.data instanceof Uint8Array && t.data.length > 0 && t.data.length <= 2 * 1024 * 1024);
+    if (embedded?.data) {
+        const mime = /^image\/(?:jpeg|png|webp|gif|avif)$/i.test(embedded.mimetype ?? '') ? embedded.mimetype! : 'image/jpeg';
+        return `data:${mime};base64,${bytesToBase64(embedded.data)}`;
+    }
+    return null;
+}
+
+function parseMuzzaThumbnail(url: unknown): Thumbnail[] {
+    if (typeof url !== 'string' || !url.trim()) return [];
+    const match = url.match(/^data:(image\/(?:jpeg|png|webp|gif|avif));base64,([a-z0-9+/]+=*)$/i);
+    if (match) {
+        try {
+            return [{ data: base64ToBytes(match[2]), mimetype: match[1].toLowerCase() }];
+        } catch {
+            return [];
+        }
+    }
+    if (/^https?:\/\//i.test(url)) return [{ url }];
+    return [];
 }
 
 /** Zeta canonical id -> Muzza song id. */
@@ -109,7 +148,7 @@ export interface MuzzaExportInput {
     /** Zeta ids that are "liked" (members of favourites). */
     likedIds: Set<string>;
     /** User playlists (favourites excluded — that maps to `liked`). */
-    playlists: { name: string; createdAt: number; trackIds: string[] }[];
+    playlists: { name: string; createdAt: number; thumbnail?: string; trackIds: string[] }[];
     /** Play events recorded in Zeta since the last import (for stats/history). */
     events?: MuzzaEvent[];
     /**
@@ -272,6 +311,7 @@ export async function buildMuzzaArchive(input: MuzzaExportInput, withDb: WithMuz
                 lastUpdateTime: now,
                 isEditable: 1,
                 bookmarkedAt: now, // shows in the Muzza library
+                thumbnailUrl: playlist.thumbnail ?? null,
                 isLocal: 0,
             });
             playlist.trackIds.forEach((zetaId, position) => {
@@ -282,15 +322,26 @@ export async function buildMuzzaArchive(input: MuzzaExportInput, withDb: WithMuz
             playlistCount++;
         }
 
-        // Append Zeta's play events to the history, then recompute play totals.
+        // Append Zeta's play events to the history (deduplicated against base), then recompute play totals.
+        const existingEventKeys = new Set<string>();
+        try {
+            for (const row of db.prepare('SELECT songId, timestamp, playTime FROM event').all() as any[]) {
+                existingEventKeys.add(`${row.songId}\0${Number(row.timestamp)}\0${Number(row.playTime)}`);
+            }
+        } catch { /* ignore */ }
         const insertEvent = adaptiveInsert(db, 'event', 'INSERT');
         for (const ev of input.events ?? []) {
             const muzzaId = toMuzzaId(ev.zetaId);
             if (!songExists.get(muzzaId)) continue;
-            insertEvent({ songId: muzzaId, timestamp: Math.round(ev.timestamp), playTime: Math.max(0, Math.round(ev.playTimeMs)) });
+            const ts = Math.round(ev.timestamp);
+            const pt = Math.max(0, Math.round(ev.playTimeMs));
+            const key = `${muzzaId}\0${ts}\0${pt}`;
+            if (existingEventKeys.has(key)) continue;
+            existingEventKeys.add(key);
+            insertEvent({ songId: muzzaId, timestamp: ts, playTime: pt });
         }
         db.exec(
-            'UPDATE song SET totalPlayTime = COALESCE((SELECT SUM(playTime) FROM event WHERE event.songId = song.id), 0)',
+            'UPDATE song SET totalPlayTime = MAX(COALESCE(totalPlayTime, 0), COALESCE((SELECT SUM(playTime) FROM event WHERE event.songId = song.id), 0))',
         );
 
         if (!fromBase) db.exec(`PRAGMA user_version = ${MUZZA_DB_VERSION}`);
@@ -315,11 +366,13 @@ export interface ImportedSong {
     zetaId: string;
     record: IndexRecord; // off-disk record (no `file`)
     liked: boolean;
+    localPath?: string | null;
 }
 
 export interface ImportedPlaylist {
     name: string;
     createdAt: number;
+    thumbnail?: string;
     trackIds: string[]; // Zeta canonical ids, in order
 }
 
@@ -335,7 +388,7 @@ export interface MuzzaImport {
 }
 
 export async function parseMuzzaArchive(backupBytes: Uint8Array, withDb: WithMuzzaDb): Promise<MuzzaImport> {
-    if (backupBytes.length > MAX_BACKUP_BYTES) throw new Error('The Muzza backup exceeds 128 MiB.');
+    if (backupBytes.length > MAX_BACKUP_BYTES) throw new Error('The Muzza backup exceeds 512 MiB.');
     const { default: JSZip } = await import('jszip');
     const zip = await JSZip.loadAsync(backupBytes);
     const dbFile = zip.file(DB_ENTRY);
@@ -371,20 +424,40 @@ export async function parseMuzzaArchive(backupBytes: Uint8Array, withDb: WithMuz
             /* lyrics table absent or unreadable */
         }
 
-        const songRows = db
-            .prepare(
-                'SELECT id, title, duration, thumbnailUrl, albumName, artistName, liked, isLocal FROM song',
-            )
-            .all() as any[];
+        const songCols = new Set(
+            (db.prepare('PRAGMA table_info(`song`)').all() as { name: string }[]).map((c) => c.name),
+        );
+        const selectSongCols = [
+            'id',
+            'title',
+            'duration',
+            'thumbnailUrl',
+            'albumName',
+            songCols.has('artistName') ? 'artistName' : 'NULL AS artistName',
+            'liked',
+            songCols.has('isLocal') ? 'isLocal' : '0 AS isLocal',
+            songCols.has('totalPlayTime') ? 'totalPlayTime' : '0 AS totalPlayTime',
+            songCols.has('inLibrary') ? 'inLibrary' : 'NULL AS inLibrary',
+            songCols.has('localPath') ? 'localPath' : 'NULL AS localPath',
+        ].join(', ');
+        const songRows = db.prepare(`SELECT ${selectSongCols} FROM song`).all() as any[];
 
         const songs: ImportedSong[] = [];
         const likedIds: string[] = [];
         const zetaIdByMuzzaId = new Map<string, string>();
+        const songTotals = new Map<string, { totalPlayTimeMs: number; inLibrary: number }>();
 
         for (const row of songRows) {
             const isLocal = !!row.isLocal;
             const zetaId = toZetaId(row.id, isLocal);
             zetaIdByMuzzaId.set(row.id, zetaId);
+            const totalPlayTimeMs = Number(row.totalPlayTime) || 0;
+            if (totalPlayTimeMs > 0) {
+                songTotals.set(zetaId, {
+                    totalPlayTimeMs,
+                    inLibrary: Number(row.inLibrary) > 0 ? Number(row.inLibrary) : Date.now(),
+                });
+            }
 
             const artists =
                 artistsBySong.get(row.id) ??
@@ -395,7 +468,7 @@ export async function parseMuzzaArchive(backupBytes: Uint8Array, withDb: WithMuz
                           .map((name: string) => ({ name, thumbnails: [] as Thumbnail[] }))
                     : []);
 
-            const thumbnails: Thumbnail[] = row.thumbnailUrl ? [{ url: row.thumbnailUrl }] : [];
+            const thumbnails: Thumbnail[] = parseMuzzaThumbnail(row.thumbnailUrl);
             const album: AlbumBase | null = row.albumName
                 ? { title: row.albumName, artists: [], thumbnails: [] }
                 : null;
@@ -412,10 +485,24 @@ export async function parseMuzzaArchive(backupBytes: Uint8Array, withDb: WithMuz
 
             const liked = !!row.liked;
             if (liked) likedIds.push(zetaId);
-            songs.push({ zetaId, record, liked });
+            songs.push({
+                zetaId,
+                record,
+                liked,
+                localPath: typeof row.localPath === 'string' && row.localPath.trim() ? row.localPath.trim() : null,
+            });
         }
 
-        const playlistRows = db.prepare('SELECT id, name, createdAt FROM playlist').all() as any[];
+        const playlistCols = new Set(
+            (db.prepare('PRAGMA table_info(`playlist`)').all() as { name: string }[]).map((c) => c.name),
+        );
+        const playlistRows = db
+            .prepare(
+                `SELECT id, name, ${playlistCols.has('createdAt') ? 'createdAt' : 'NULL AS createdAt'}, ${
+                    playlistCols.has('thumbnailUrl') ? 'thumbnailUrl' : 'NULL AS thumbnailUrl'
+                } FROM playlist`,
+            )
+            .all() as any[];
         const playlists: ImportedPlaylist[] = [];
 
         for (const row of playlistRows) {
@@ -426,21 +513,42 @@ export async function parseMuzzaArchive(backupBytes: Uint8Array, withDb: WithMuz
             const trackIds = mapRows
                 .map((m) => zetaIdByMuzzaId.get(m.songId))
                 .filter((id): id is string => !!id);
+            const thumb = typeof row.thumbnailUrl === 'string' && /^(https?:\/\/|data:image\/)/i.test(row.thumbnailUrl)
+                ? row.thumbnailUrl
+                : undefined;
             playlists.push({
                 name: row.name || 'Imported Playlist',
                 createdAt: typeof row.createdAt === 'number' ? row.createdAt : Date.now(),
+                thumbnail: thumb,
                 trackIds,
             });
         }
 
-        // Play history / stats.
-        const eventRows = db.prepare('SELECT songId, timestamp, playTime FROM event').all() as any[];
-        const events: MuzzaEvent[] = eventRows
-            .map((e) => {
-                const zetaId = zetaIdByMuzzaId.get(e.songId);
-                return zetaId ? { zetaId, timestamp: Number(e.timestamp), playTimeMs: Number(e.playTime) } : null;
-            })
-            .filter((e): e is MuzzaEvent => !!e);
+        // Play history / stats (both `event` table rows and any aggregate `song.totalPlayTime` balance).
+        let eventRows: any[] = [];
+        try {
+            eventRows = db.prepare('SELECT songId, timestamp, playTime FROM event').all() as any[];
+        } catch { /* event table absent */ }
+        const eventSumByZetaId = new Map<string, number>();
+        const events: MuzzaEvent[] = [];
+        for (const e of eventRows) {
+            const zetaId = zetaIdByMuzzaId.get(e.songId);
+            const playTimeMs = Number(e.playTime) || 0;
+            const timestamp = Number(e.timestamp) || Date.now();
+            if (!zetaId || playTimeMs <= 0) continue;
+            events.push({ zetaId, timestamp, playTimeMs });
+            eventSumByZetaId.set(zetaId, (eventSumByZetaId.get(zetaId) ?? 0) + playTimeMs);
+        }
+        for (const [zetaId, { totalPlayTimeMs, inLibrary }] of songTotals) {
+            const accounted = eventSumByZetaId.get(zetaId) ?? 0;
+            if (totalPlayTimeMs - accounted >= 1000) {
+                events.push({
+                    zetaId,
+                    timestamp: inLibrary,
+                    playTimeMs: totalPlayTimeMs - accounted,
+                });
+            }
+        }
 
         return { songs, playlists, likedIds, events, db: dbBytes, settings };
     });

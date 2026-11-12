@@ -1,7 +1,7 @@
 import { CapacitorHttp } from '@capacitor/core';
 import { Song as Saavn } from '@saavn-labs/sdk';
 import { Innertube, Parser, Platform } from 'youtubei.js/web';
-import type { ArtistDetails, CollectionDetails, MusicProvider, SearchExtras, Song } from '../schema';
+import type { ArtistDetails, CollectionDetails, MusicProvider, SearchExtras, Song, VideoStreamInfo } from '../schema';
 import { chooseAudioFormat, MAX_BITRATE_KBPS, type AudioQuality } from '../audio-quality';
 import {
     fetchArtistAllSongs,
@@ -11,6 +11,7 @@ import {
     searchMusicAlbums,
     searchMusicExtras,
     searchMusicPlaylists,
+    searchMusicSongs,
     searchMusicVideos,
     ytSearchItems,
     ytToSong,
@@ -54,13 +55,49 @@ function yt() {
 }
 
 export async function search(query: string, provider: MusicProvider): Promise<Song[]> {
-    const empty = new Set<string>();
-    if (provider === 'js') return (await Saavn.search({ query, limit: 30 })).results.map((s) => saavnToSong(s, empty));
-    if (provider !== 'yt') throw new Error('Choose YouTube Music or JioSaavn to search.');
-    const results = await (await yt()).music.search(query, { type: 'song' });
-    return ytSearchItems(results, 'song', 'songs')
-        .map((s) => ytToSong(s, empty))
-        .filter((s): s is Song => s !== null);
+    return searchMusicSongs(async () => (await yt()).music, new Set<string>(), query, provider);
+}
+
+export async function videoStream(videoId: string): Promise<VideoStreamInfo> {
+    if (!/^[\w-]{11}$/.test(videoId)) throw new Error('Invalid YouTube video ID.');
+    const tube = await yt();
+    const token = await (await import('./potoken')).mintPoToken(videoId);
+    const info = await tube.getInfo(videoId, { client: 'YTMUSIC' }).catch(() => tube.getBasicInfo(videoId, { client: 'YTMUSIC' }));
+    const adaptive = info.streaming_data?.adaptive_formats ?? [];
+    const muxed = info.streaming_data?.formats ?? [];
+
+    const vp9 = adaptive
+        .filter((f: any) => f.has_video && !f.has_audio && f.mime_type?.includes('video/webm') && (f.height ?? 0) <= 720)
+        .sort((a: any, b: any) => (b.height ?? 0) - (a.height ?? 0) || (b.bitrate ?? 0) - (a.bitrate ?? 0));
+    const mp4Video = adaptive
+        .filter((f: any) => f.has_video && !f.has_audio && f.mime_type?.includes('video/mp4') && (f.height ?? 0) <= 720)
+        .sort((a: any, b: any) => (b.height ?? 0) - (a.height ?? 0) || (b.bitrate ?? 0) - (a.bitrate ?? 0));
+    const progVideo = muxed
+        .filter((f: any) => f.has_video && f.has_audio)
+        .sort((a: any, b: any) => (b.height ?? 0) - (a.height ?? 0));
+
+    const videoFmt = progVideo[0] ?? vp9[0] ?? mp4Video[0];
+    if (!videoFmt) throw new Error('No playable video stream was found for this song.');
+
+    const videoUrl = `${await videoFmt.decipher(tube.session.player)}&pot=${encodeURIComponent(token)}`;
+    let audioUrl: string | undefined;
+    if (!videoFmt.has_audio) {
+        const audioFmt = adaptive
+            .filter((f: any) => f.has_audio && !f.has_video)
+            .sort((a: any, b: any) => (b.bitrate ?? 0) - (a.bitrate ?? 0))[0];
+        if (audioFmt) {
+            audioUrl = `${await audioFmt.decipher(tube.session.player)}&pot=${encodeURIComponent(token)}`;
+        }
+    }
+
+    return {
+        videoId,
+        videoUrl,
+        audioUrl,
+        width: Number(videoFmt.width) || 1280,
+        height: Number(videoFmt.height) || 720,
+        duration: Number(info.basic_info?.duration) || 0,
+    };
 }
 
 export async function radio(seed: Song, exclude: string[] = [], downloaded = new Set<string>()): Promise<Song[]> {

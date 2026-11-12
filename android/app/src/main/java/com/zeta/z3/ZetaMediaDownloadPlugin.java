@@ -61,12 +61,12 @@ public class ZetaMediaDownloadPlugin extends Plugin {
     }
 
     private void copyRange(URL base, int offset, int bytes, FileOutputStream output) throws Exception {
-        URL request = new URL(base.toExternalForm() + "&range=" + offset + "-" + (offset + bytes - 1));
-        HttpsURLConnection connection = (HttpsURLConnection) request.openConnection();
-        connection.setInstanceFollowRedirects(false);
+        HttpsURLConnection connection = (HttpsURLConnection) base.openConnection();
+        connection.setInstanceFollowRedirects(true);
         connection.setConnectTimeout(8000);
         connection.setReadTimeout(12000);
         connection.setRequestProperty("Accept-Encoding", "identity");
+        connection.setRequestProperty("Range", "bytes=" + offset + "-" + (offset + bytes - 1));
         try {
             int status = connection.getResponseCode();
             if (status != 200 && status != 206) throw new IOException("YouTube media returned HTTP " + status + ".");

@@ -3,12 +3,14 @@
     import QRCode from 'qrcode';
     import jsQR from 'jsqr';
     import { peers } from '$lib/state/peers.svelte';
+    import { wayship } from '$lib/state/wayship.svelte';
     import { toasts } from '$lib/state/toast.svelte';
     import { client } from '$lib/ephaptic';
     import type { Song } from '$lib/schema';
 
     let { includeAudio }: { includeAudio: boolean } = $props();
     let code = $state('');
+    let wayshipTokenInput = $state('');
     let qr = $state('');
     let qrTooLarge = $state(false);
     let camera = $state<MediaStream | null>(null);
@@ -146,15 +148,101 @@
 </script>
 
 <section class="card peer">
-    <h2>Nearby devices</h2>
-    <p class="muted">Use the same local network. Scan the invitation once or paste its code.</p>
+    <div class="wayship-box">
+        <div class="wayship-head">
+            <div>
+                <span class="wayship-eyebrow">Wayship P2P Cloud Mesh</span>
+                <h2>Connect with Wayship</h2>
+                <p class="muted">
+                    Sign in on your desktop and phone to automatically discover your devices and sync listening stats, playlists, and favourites anywhere—even across different networks.
+                </p>
+            </div>
+            {#if wayship.connected}
+                <button class="btn" onclick={() => wayship.disconnect()}>Disconnect</button>
+            {:else}
+                <button class="btn btn-primary" disabled={wayship.connecting} onclick={() => wayship.signInWithBrowser()}>
+                    {wayship.connecting ? 'Waiting for Wayship…' : 'Connect with Wayship'}
+                </button>
+            {/if}
+        </div>
+
+        {#if wayship.connected}
+            <div class="wayship-status">
+                <span class="pulse-dot" aria-hidden="true"></span>
+                <span>
+                    Connected as <strong>{wayship.displayName || wayship.handle}</strong>
+                    {#if wayship.handle}<small class="muted">(@{wayship.handle})</small>{/if}
+                    · <small class="muted">{wayship.deviceName}</small>
+                </span>
+                <button class="btn" onclick={() => run(() => wayship.announce())}>Refresh peers</button>
+            </div>
+
+            {#if wayship.onlinePeers.length}
+                <div class="wayship-peers" role="list" aria-label="Online Wayship devices">
+                    {#each wayship.onlinePeers as wp (wp.peer_id)}
+                        {@const linked = peers.links.find((l) => l.wayshipPeerId === wp.peer_id && l.connected)}
+                        <div class="wayship-peer" role="listitem">
+                            <div class="wayship-peer-info">
+                                <span class="pulse-dot" aria-hidden="true"></span>
+                                <strong>{wp.device_name || 'Zeta device'}</strong>
+                                <small class="muted">{linked ? `Connected (${linked.mode})` : 'Online on Wayship'}</small>
+                            </div>
+                            <div class="buttons">
+                                <button class="btn" onclick={() => run(() => wayship.connectPeer(wp.peer_id, 'remote', includeAudio))}>
+                                    Sync &amp; Remote
+                                </button>
+                                <button class="btn" onclick={() => run(() => wayship.connectPeer(wp.peer_id, 'party', includeAudio))}>
+                                    Play Together
+                                </button>
+                                <button class="btn" onclick={() => run(() => wayship.connectPeer(wp.peer_id, 'backup', includeAudio))}>
+                                    Send Backup
+                                </button>
+                            </div>
+                        </div>
+                    {/each}
+                </div>
+            {:else}
+                <p class="muted">No other Zeta devices are online on your Wayship account right now. Open Zeta and connect Wayship on another device to auto-sync.</p>
+            {/if}
+        {:else}
+            <form class="invitation" onsubmit={(e) => {
+                e.preventDefault();
+                void run(async () => {
+                    await wayship.useToken(wayshipTokenInput);
+                    wayshipTokenInput = '';
+                });
+            }}>
+                <label for="wayship-token">Or paste a Wayship app token (<code>wsa_…</code>)</label>
+                <div class="code-row">
+                    <input class="input" id="wayship-token" type="password" bind:value={wayshipTokenInput}
+                        placeholder="wsa_…" spellcheck={false} autocomplete="off" autocapitalize="off" />
+                    <button class="btn" type="submit" disabled={!wayshipTokenInput.trim()}>Save token</button>
+                </div>
+            </form>
+        {/if}
+    </div>
+
+    <hr class="peer-divider" />
+
+    <h2>Nearby &amp; Tailscale devices</h2>
+    <p class="muted">Tap a mode on both devices to pair automatically over Wi-Fi/LAN or Tailscale, or scan/paste the invitation code.</p>
     <div class="buttons">
-        <button class="btn" disabled={!!peers.pending || peers.busy || joining} onclick={() => invite('backup')}>Send Zeta backup by QR</button>
-        <button class="btn" disabled={!!peers.pending || peers.busy || joining} onclick={() => invite('remote')}>Pair remote control</button>
-        <button class="btn" disabled={!!peers.pending || peers.busy || joining} onclick={() => invite('party')}>Invite to play together</button>
+        <button class="btn btn-primary" disabled={!!peers.pending || peers.busy || joining} onclick={() => invite('party')}>
+            Pair &amp; Play Together
+        </button>
+        <button class="btn" disabled={!!peers.pending || peers.busy || joining} onclick={() => invite('remote')}>
+            Pair Remote &amp; Sync
+        </button>
+        <button class="btn" disabled={!!peers.pending || peers.busy || joining} onclick={() => invite('backup')}>
+            Send Zeta backup
+        </button>
     </div>
     {#if peers.pending}
-        <p role="status">{peers.pending.host ? 'Scan this invitation on the other device.' : 'Connecting to the host…'}</p>
+        <p role="status">
+            {peers.pending.host
+                ? 'Searching for other Zeta devices… Tap Pair on your other device, or scan this QR code.'
+                : 'Connecting to the host…'}
+        </p>
         {#if qr}<img src={qr} alt="Pairing invitation QR code" />{/if}
         {#if qrTooLarge}<p class="muted">Use Copy code if this connection is too large for a QR code.</p>{/if}
         <div class="buttons">
@@ -202,6 +290,8 @@
             <span>{link.mode === 'party' ? 'Listening party' : link.mode === 'backup' ? 'Backup transfer' : 'Remote control'}</span>
             {#if link.mode === 'backup' && link.host}
                 <button class="btn" disabled={peers.progress !== null} onclick={() => run(() => peers.sendBackup(link.id))}>Send backup again</button>
+            {:else}
+                <button class="btn" disabled={peers.progress !== null} onclick={() => run(() => peers.syncLibrary(link.id, true))}>Sync stats &amp; library</button>
             {/if}
             <button class="btn" onclick={() => peers.disconnect(link.id)}>Disconnect</button>
         </div>
@@ -237,6 +327,54 @@
 
 <style>
     .peer { display: grid; gap: 12px; padding: 18px; }
+    .wayship-box { display: grid; gap: 12px; }
+    .wayship-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+    .wayship-head > div { flex: 1; min-width: 240px; }
+    .wayship-eyebrow {
+        display: inline-block;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--accent);
+        margin-bottom: 2px;
+    }
+    .wayship-status {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        padding: 10px 12px;
+        border-radius: var(--r-md);
+        background: rgb(255 255 255 / 0.04);
+        border: 1px solid var(--border);
+    }
+    .wayship-peers { display: grid; gap: 8px; }
+    .wayship-peer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+        padding: 10px 12px;
+        border-radius: var(--r-md);
+        background: rgb(255 255 255 / 0.03);
+        border: 1px solid var(--border);
+    }
+    .wayship-peer-info { display: flex; align-items: center; gap: 8px; }
+    .pulse-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #34d399;
+        box-shadow: 0 0 8px #34d399;
+        flex-shrink: 0;
+    }
+    .peer-divider {
+        border: 0;
+        border-top: 1px solid var(--border);
+        margin: 4px 0;
+    }
     .buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
     .invitation { display: grid; gap: 6px; min-width: 0; }
     .invitation label { color: var(--text-2); font-weight: 650; }

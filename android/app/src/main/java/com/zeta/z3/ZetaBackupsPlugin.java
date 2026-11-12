@@ -19,7 +19,7 @@ import java.io.OutputStream;
 
 @CapacitorPlugin(name = "ZetaBackups")
 public class ZetaBackupsPlugin extends Plugin {
-    private static final long MAX_BYTES = 128L * 1024 * 1024;
+    private static final long MAX_BYTES = 512L * 1024 * 1024;
 
     private File cacheFile(PluginCall call) {
         String key = call.getString("key", "");
@@ -86,7 +86,7 @@ public class ZetaBackupsPlugin extends Plugin {
                     int count;
                     while ((count = input.read(bytes)) != -1) {
                         size += count;
-                        if (size > MAX_BYTES) throw new IOException("The backup exceeds 128 MiB.");
+                        if (size > MAX_BYTES) throw new IOException("The backup exceeds 512 MiB.");
                         output.write(bytes, 0, count);
                     }
                 }

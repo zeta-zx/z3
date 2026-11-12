@@ -95,6 +95,15 @@ export interface SearchExtras {
     playlists: CollectionSummary[];
 }
 
+export interface VideoStreamInfo {
+    videoId: string;
+    videoUrl: string;
+    audioUrl?: string;
+    width: number;
+    height: number;
+    duration: number;
+}
+
 export interface Playlist {
     id: string;
     name: string;

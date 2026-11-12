@@ -2,8 +2,8 @@ import { decode, encode } from '@msgpack/msgpack';
 import type { JSZipObject } from 'jszip';
 import type { Artist, Song, Thumbnail } from './schema';
 
-export const MAX_BACKUP_BYTES = 128 * 1024 * 1024;
-export const BACKUP_AUDIO_LIMIT_MESSAGE = 'Offline audio exceeds the 128 MiB backup limit.';
+export const MAX_BACKUP_BYTES = 512 * 1024 * 1024;
+export const BACKUP_AUDIO_LIMIT_MESSAGE = 'Offline audio exceeds the 512 MiB backup limit.';
 const MAX_MANIFEST_BYTES = 16 * 1024 * 1024;
 const MANIFEST = 'zeta.msgpack';
 const AUDIO_TYPES: Record<string, string> = {
@@ -205,7 +205,7 @@ export async function makeZetaBackup(
 }
 
 export async function openZetaBackup(bytes: Uint8Array) {
-    if (bytes.length > MAX_BACKUP_BYTES) throw new Error('The backup exceeds 128 MiB.');
+    if (bytes.length > MAX_BACKUP_BYTES) throw new Error('The backup exceeds 512 MiB.');
     const { default: JSZip } = await import('jszip');
     const zip = await JSZip.loadAsync(bytes);
     const file = zip.file(MANIFEST);

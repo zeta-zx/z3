@@ -10,12 +10,12 @@ import type {
     SearchExtras,
     Song,
     Thumbnail,
-} from './schema';
-import { musicText, youtubeArtists } from './music-metadata';
-import { comparableText } from '../../electron/lib/lyricsfile';
-import { ytSearchItems } from './youtube-search-results';
+} from './schema.ts';
+import { musicText, youtubeArtists } from './music-metadata.ts';
+import { comparableText } from '../../electron/lib/lyricsfile.ts';
+import { ytSearchItems } from './youtube-search-results.ts';
 
-export { ytSearchItems } from './youtube-search-results';
+export { ytSearchItems } from './youtube-search-results.ts';
 
 type YtMusicLike = {
     search(query: string, options?: { type?: 'song' | 'video' | 'album' | 'playlist' | 'artist' }): Promise<any>;
@@ -310,6 +310,136 @@ export async function searchMusicVideos(
         .map((item: any) => ytToSong(item, downloaded))
         .filter((song: Song | null): song is Song => song !== null)
         .slice(0, 12);
+}
+
+const IMITATION_RE =
+    /\b(?:karaoke|tribute|originally performed by|in the style of|made famous by|backing track|instrumental version|without .* instrumental)\b/i;
+const EDIT_NOISE_RE = /\b(?:slowed|sped\s*up|nightcore|8d\s*audio|reverb|432\s*hz)\b/i;
+const VIDEO_CLUTTER_RE = /#\w+|\b(?:dance\s*cover|acoustic\s*cover|guitar\s*cover|drum\s*cover|piano\s*cover|reaction|tutorial|lesson)\b/i;
+const VIDEO_TAG_RE =
+    /\((?:official\s*)?(?:music\s*)?(?:video|audio|lyrics?|lyric\s*video|visuali[sz]er|hd|4k)\)|\[(?:official\s*)?(?:music\s*)?(?:video|audio|lyrics?|lyric\s*video|visuali[sz]er|hd|4k)\]/gi;
+
+function searchTokens(text: string): string[] {
+    return text
+        .normalize('NFKD')
+        .replace(/\p{Diacritic}/gu, '')
+        .toLowerCase()
+        .replace(/&/g, ' and ')
+        .replace(/[^\p{L}\p{N}]+/gu, ' ')
+        .trim()
+        .split(/\s+/)
+        .filter((tok) => tok && tok !== 'and' && tok !== 'the');
+}
+
+/**
+ * Rank and merge YouTube Music song and video search results so official tracks
+ * that only exist under Videos (e.g. "King" by "Years & Years") surface ahead
+ * of karaoke/tribute versions or unrelated songs by the same artist.
+ */
+export function rankYoutubeSearchSongs(
+    query: string,
+    songs: Song[],
+    videos: Song[] = [],
+): Song[] {
+    const byMatch = query.match(/^(.+?)\s+by\s+(.+)$/i);
+    const effectiveQuery = byMatch ? `${byMatch[1]} ${byMatch[2]}` : query;
+    const wantedTokens = [...new Set(searchTokens(effectiveQuery))];
+    const wantedTitleTokens = byMatch ? searchTokens(byMatch[1]) : [];
+    const wantedArtistTokens = byMatch ? searchTokens(byMatch[2]) : [];
+    const wantsImitation = IMITATION_RE.test(query);
+    const wantsEdit = EDIT_NOISE_RE.test(query);
+    const wantsClutter = VIDEO_CLUTTER_RE.test(query);
+
+    const entries = new Map<string, { song: Song; isSongShelf: boolean; order: number }>();
+    let order = 0;
+    for (const song of songs) {
+        if (!entries.has(song.id)) entries.set(song.id, { song, isSongShelf: true, order: order++ });
+    }
+    let addedVideos = 0;
+    for (const video of videos) {
+        if (entries.has(video.id)) continue;
+        entries.set(video.id, { song: video, isSongShelf: false, order: order++ });
+        if (++addedVideos >= 10) break;
+    }
+
+    const scored = [...entries.values()].map((entry) => {
+        const { song, isSongShelf } = entry;
+        const cleanTitle = song.title.replace(VIDEO_TAG_RE, ' ').trim();
+        const artistStr = song.artists.map((a) => a.name).join(' ');
+        const combinedStr = `${cleanTitle} ${artistStr}`;
+        const titleTokens = new Set(searchTokens(cleanTitle));
+        const artistTokens = new Set(searchTokens(artistStr));
+        const allTokens = new Set([...titleTokens, ...artistTokens]);
+
+        let score = isSongShelf ? 32 : 0;
+        score -= entry.order * 1.4;
+
+        if (!wantsImitation && IMITATION_RE.test(combinedStr)) score -= 95;
+        if (!wantsEdit && EDIT_NOISE_RE.test(combinedStr)) score -= 45;
+        if (!wantsClutter && VIDEO_CLUTTER_RE.test(combinedStr)) score -= 60;
+
+        if (wantedTokens.length) {
+            const matched = wantedTokens.filter((t) => allTokens.has(t));
+            const ratio = matched.length / wantedTokens.length;
+            score += ratio * 55;
+            if (ratio === 1) score += 30;
+            // Both title and artist contribute to the match (not just artist alone).
+            const titleHits = wantedTokens.filter((t) => titleTokens.has(t)).length;
+            const artistHits = wantedTokens.filter((t) => artistTokens.has(t)).length;
+            if (titleHits > 0 && artistHits > 0) score += 28;
+            else if (titleHits === 0) score -= 25;
+        }
+
+        if (wantedTitleTokens.length && wantedArtistTokens.length) {
+            const exactTitle =
+                wantedTitleTokens.every((t) => titleTokens.has(t)) &&
+                titleTokens.size <= wantedTitleTokens.length + 2;
+            const artistMatch = wantedArtistTokens.every((t) => artistTokens.has(t));
+            if (exactTitle && artistMatch) score += 45;
+        }
+
+        return { song, score, order: entry.order };
+    });
+
+    scored.sort((a, b) => b.score - a.score || a.order - b.order);
+    return scored.map((s) => s.song).slice(0, 30);
+}
+
+export async function searchMusicSongs(
+    getYt: () => Promise<YtMusicLike>,
+    downloaded: Set<string>,
+    query: string,
+    provider: MusicProvider,
+): Promise<Song[]> {
+    if (provider === 'js') {
+        const res = await SaavnSong.search({ query, limit: 30 });
+        return (res.results ?? []).map((s: any) => saavnToSong(s, downloaded));
+    }
+    if (provider !== 'yt') throw new Error(`Provider '${provider}' not supported for searching.`);
+
+    const yt = await getYt();
+    const byMatch = query.match(/^(.+?)\s+by\s+(.+)$/i);
+    const strippedQuery = byMatch ? `${byMatch[1].trim()} ${byMatch[2].trim()}` : null;
+
+    const [songRes, strippedSongRes, videoRes] = await Promise.allSettled([
+        yt.search(query, { type: 'song' }),
+        strippedQuery ? yt.search(strippedQuery, { type: 'song' }) : Promise.resolve(null),
+        yt.search(strippedQuery ?? query, { type: 'video' }),
+    ]);
+
+    const toSongs = (res: PromiseSettledResult<any>, section: string, legacy: string): Song[] =>
+        res.status === 'fulfilled' && res.value
+            ? ytSearchItems(res.value, section, legacy)
+                  .map((item: any) => ytToSong(item, downloaded))
+                  .filter((s: Song | null): s is Song => s !== null)
+            : [];
+
+    const songs = [
+        ...toSongs(strippedSongRes, 'song', 'songs'),
+        ...toSongs(songRes, 'song', 'songs'),
+    ];
+    const videos = toSongs(videoRes, 'video', 'videos');
+    return rankYoutubeSearchSongs(query, songs, videos);
 }
 
 export async function fetchArtistDetails(

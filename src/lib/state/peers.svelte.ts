@@ -1,7 +1,8 @@
 import { client } from '$lib/ephaptic';
-import { INVITE_LIFETIME, makeNearbyInvite, openNearbyAnswer, readNearbyInvite, sealNearbyAnswer } from '$lib/nearby-pairing';
+import { DISCOVERY_PORT, INVITE_LIFETIME, makeNearbyInvite, openNearbyAnswer, readNearbyInvite, sealNearbyAnswer } from '$lib/nearby-pairing';
 import { createPeer, decodeSignal, acceptPeer, sendPeerBytes, type PeerMode } from '$lib/peer-connection';
 import { addToQueue, nextTrack, previousTrack, playerState, playTrack, setVolume, togglePlay } from './player.svelte';
+import { libraryState } from './library.svelte';
 import { settingsState } from './settings.svelte';
 import { ui } from './ui.svelte';
 import { toasts } from './toast.svelte';
@@ -10,8 +11,18 @@ import type { Song } from '$lib/schema';
 
 type Command = 'toggle' | 'next' | 'previous' | 'seek' | 'volume';
 type RemotePlayback = { song: Song | null; paused: boolean; position: number; duration: number; queue: string[] };
-type Link = { id: string; mode: PeerMode; peer: RTCPeerConnection; channel?: RTCDataChannel; host: boolean; connected: boolean; backupAudio?: boolean };
-type IncomingBackup = { id: string; bytes: Uint8Array; offset: number; digest: string };
+type Link = {
+    id: string;
+    mode: PeerMode;
+    peer: RTCPeerConnection;
+    channel?: RTCDataChannel;
+    host: boolean;
+    connected: boolean;
+    backupAudio?: boolean;
+    wayshipPeerId?: string;
+    deviceName?: string;
+};
+type IncomingBackup = { id: string; bytes: Uint8Array; offset: number; digest: string; silentSync?: boolean };
 
 function wireSong(input: unknown, remote = false): Song | null {
     const song = input as Song | null;
@@ -69,7 +80,12 @@ class Peers {
             link.connected = true;
             this.closeListener(link.id);
             if (this.pending?.id === link.id) this.pending = null;
-            if (link.backupAudio !== undefined) void this.sendBackup(link.id).catch((error) => toasts.error(error));
+            if (link.backupAudio !== undefined) {
+                void this.sendBackup(link.id).catch((error) => toasts.error(error));
+            } else {
+                // Automatically sync listening stats, favourites, and playlists across paired devices.
+                void this.syncLibrary(link.id).catch(() => {});
+            }
         };
         channel.onclose = () => this.disconnect(link.id);
         channel.onmessage = ({ data }) => { void this.receive(link, data).catch((error) => {
@@ -123,7 +139,8 @@ class Peers {
             }, offer);
             peer = result.peer;
             const reply = invite ? await sealNearbyAnswer(invite.secret, result.code) : undefined;
-            const hostInvite = invite ? undefined : makeNearbyInvite(await client.nearbyListen(), result.code);
+            const endpoint = invite ? undefined : await client.nearbyListen();
+            const hostInvite = endpoint ? makeNearbyInvite(endpoint, result.code) : undefined;
             if (hostInvite) this.listenerId = id;
             this.links.push({ id, mode, peer, host: !invite, connected: false, backupAudio });
             const link = this.links.at(-1)!;
@@ -131,7 +148,7 @@ class Peers {
             peer.onconnectionstatechange = () => {
                 if (link.peer.connectionState === 'failed') {
                     this.disconnect(id);
-                    toasts.error('Could not reach the other device. Check that both are on the same local network.');
+                    toasts.error('Could not reach the other device. Check that both are on the same network or Tailscale.');
                 }
             };
             this.pending = { id, mode, code: hostInvite?.code, host: !invite };
@@ -140,12 +157,30 @@ class Peers {
                 void this.exchangeAnswer(link, async () => {
                     await client.nearbySend(invite.addresses, invite.port, reply);
                 }, 18_000);
-            } else if (hostInvite) {
+            } else if (hostInvite && endpoint) {
                 let accepted = false;
+                let tick = 0;
                 void this.exchangeAnswer(link, async () => {
                     if (accepted) return;
+                    // Broadcast our invitation over LAN + Tailscale so clicking "Pair" on both devices pairs automatically.
+                    if (tick++ % 2 === 0) {
+                        await client.nearbySend(endpoint.addresses, DISCOVERY_PORT, hostInvite.code).catch(() => {});
+                    }
                     for (const packet of await client.nearbyReceive()) {
                         if (this.pending?.id !== id) break;
+                        if (packet.startsWith('zeta-peer:2:')) {
+                            try {
+                                const other = readNearbyInvite(packet);
+                                // Deterministic tie-breaker when both devices tap Pair simultaneously.
+                                if (other.secret !== hostInvite.secret && hostInvite.secret < other.secret && !this.links.some((l) => !l.host)) {
+                                    accepted = true;
+                                    this.disconnect(id);
+                                    void this.join(packet).catch((err) => toasts.error(err));
+                                    return;
+                                }
+                            } catch { /* ignore invalid broadcast */ }
+                            continue;
+                        }
                         try {
                             const answer = await openNearbyAnswer(hostInvite.secret, packet);
                             if (this.pending?.id !== id) break;
@@ -168,6 +203,87 @@ class Peers {
 
     invite(mode: PeerMode, includeAudio = true) { return this.pair(mode, undefined, mode === 'backup' ? includeAudio : undefined); }
     join(code: string) { return this.pair('backup', code); }
+
+    async connectWayshipPeer(
+        remotePeerId: string,
+        deviceName: string,
+        mode: PeerMode,
+        iceServers: RTCIceServer[],
+        sendSignal: (toPeer: string, kind: 'offer' | 'answer' | 'ice' | 'data', payload: unknown) => Promise<void>,
+        backupAudio?: boolean,
+    ) {
+        const existing = this.links.find((l) => l.wayshipPeerId === remotePeerId);
+        if (existing) {
+            existing.mode = mode;
+            if (existing.connected) {
+                if (mode === 'backup') void this.sendBackup(existing.id).catch((err) => toasts.error(err));
+                else void this.syncLibrary(existing.id, true);
+                return;
+            }
+            this.disconnect(existing.id);
+        }
+        const id = `wayship:${remotePeerId}`;
+        const peer = new RTCPeerConnection({ iceServers });
+        const channel = peer.createDataChannel('zeta', { ordered: true });
+        const link: Link = { id, mode, peer, host: true, connected: false, backupAudio, wayshipPeerId: remotePeerId, deviceName };
+        this.links.push(link);
+        this.attach(link, channel);
+        this.startBroadcast();
+
+        peer.onicecandidate = ({ candidate }) => {
+            if (candidate) void sendSignal(remotePeerId, 'ice', candidate.toJSON()).catch(() => {});
+        };
+        peer.onconnectionstatechange = () => {
+            if (peer.connectionState === 'failed') this.disconnect(id);
+        };
+
+        const offer = await peer.createOffer();
+        await peer.setLocalDescription(offer);
+        await sendSignal(remotePeerId, 'offer', { sdp: peer.localDescription?.sdp, mode });
+    }
+
+    async handleWayshipSignal(
+        remotePeerId: string,
+        deviceName: string,
+        kind: string,
+        payload: any,
+        iceServers: RTCIceServer[],
+        sendSignal: (toPeer: string, kind: 'offer' | 'answer' | 'ice' | 'data', payload: unknown) => Promise<void>,
+    ) {
+        const id = `wayship:${remotePeerId}`;
+        if (kind === 'offer' && payload && typeof payload.sdp === 'string') {
+            const existing = this.links.find((l) => l.id === id);
+            if (existing) this.disconnect(id);
+            const mode: PeerMode = ['backup', 'remote', 'party'].includes(payload.mode) ? payload.mode : 'remote';
+            const peer = new RTCPeerConnection({ iceServers });
+            const link: Link = { id, mode, peer, host: false, connected: false, wayshipPeerId: remotePeerId, deviceName };
+            this.links.push(link);
+            this.startBroadcast();
+
+            peer.ondatachannel = ({ channel }) => this.attach(link, channel);
+            peer.onicecandidate = ({ candidate }) => {
+                if (candidate) void sendSignal(remotePeerId, 'ice', candidate.toJSON()).catch(() => {});
+            };
+            peer.onconnectionstatechange = () => {
+                if (peer.connectionState === 'failed') this.disconnect(id);
+            };
+
+            await peer.setRemoteDescription({ type: 'offer', sdp: payload.sdp });
+            const answer = await peer.createAnswer();
+            await peer.setLocalDescription(answer);
+            await sendSignal(remotePeerId, 'answer', { sdp: peer.localDescription?.sdp, mode });
+            return;
+        }
+        const link = this.links.find((l) => l.id === id);
+        if (!link) return;
+        if (kind === 'answer' && payload && typeof payload.sdp === 'string') {
+            if (link.peer.signalingState === 'have-local-offer') {
+                await link.peer.setRemoteDescription({ type: 'answer', sdp: payload.sdp });
+            }
+        } else if (kind === 'ice' && payload && typeof payload.candidate === 'string') {
+            await link.peer.addIceCandidate(payload).catch(() => {});
+        }
+    }
 
     disconnect(id: string) {
         const link = this.links.find((item) => item.id === id);
@@ -193,7 +309,7 @@ class Peers {
             } catch (error) {
                 if (link.backupAudio === false || !String(error).includes(BACKUP_AUDIO_LIMIT_MESSAGE)) throw error;
                 const sendLibrary = await ui.confirm('Send a library-only backup?', {
-                    message: 'The offline audio exceeds 128 MiB. Your songs, playlists, favourites, and listening history can still be transferred.',
+                    message: 'The offline audio exceeds 512 MiB. Your songs, playlists, favourites, and listening history can still be transferred.',
                     confirmLabel: 'Send library backup',
                 });
                 if (!sendLibrary || link.channel.readyState !== 'open') return;
@@ -206,6 +322,21 @@ class Peers {
             this.send(link, { type: 'backup-end' });
             toasts.success('Backup sent. Confirm the preview on the receiving device.');
         } finally { this.progress = null; }
+    }
+
+    async syncLibrary(id: string, showToast = false) {
+        const link = this.links.find((item) => item.id === id && item.connected && item.channel);
+        if (!link?.channel || this.progress !== null) return;
+        try {
+            const { bytes } = await client.zetaBackupBytes(false);
+            const data = Uint8Array.from(bytes);
+            this.send(link, { type: 'sync-start', size: data.length, digest: await digest(data) });
+            await sendPeerBytes(link.channel, data, () => {});
+            this.send(link, { type: 'sync-end' });
+            if (showToast) toasts.success('Synced stats, playlists, and favourites with paired device.');
+        } catch (error) {
+            if (showToast) toasts.error(error);
+        }
     }
 
     command(command: Command, value?: number) {
@@ -225,12 +356,26 @@ class Peers {
             if (!backup || backup.id !== link.id || backup.offset + data.byteLength > backup.bytes.length) return;
             backup.bytes.set(new Uint8Array(data), backup.offset);
             backup.offset += data.byteLength;
-            this.progress = backup.offset / backup.bytes.length;
+            if (!backup.silentSync) this.progress = backup.offset / backup.bytes.length;
             return;
         }
         if (typeof data !== 'string' || data.length > 32_000) return;
         const message = JSON.parse(data);
         if (!message || typeof message.type !== 'string') return;
+        if (message.type === 'sync-start' && !this.incoming && Number.isSafeInteger(message.size) &&
+            message.size > 0 && message.size <= MAX_BACKUP_BYTES && /^[a-f0-9]{64}$/.test(message.digest)) {
+            this.incoming = { id: link.id, bytes: new Uint8Array(message.size), offset: 0, digest: message.digest, silentSync: true };
+            return;
+        }
+        if (message.type === 'sync-end' && this.incoming?.id === link.id && this.incoming.silentSync) {
+            const sync = this.incoming;
+            this.incoming = null;
+            if (sync.offset === sync.bytes.length && await digest(Uint8Array.from(sync.bytes)) === sync.digest) {
+                await client.zetaImportBytes(sync.bytes);
+                await libraryState.refresh();
+            }
+            return;
+        }
         if (link.mode === 'backup') {
             if (link.host) return;
             if (message.type === 'backup-start' && !this.incoming && Number.isSafeInteger(message.size) &&

@@ -196,6 +196,16 @@ export const androidClient: Routes = {
     nearbyReceive: async () => (await nearby.receive()).packets,
     nearbyClose: () => nearby.close(),
     nearbySend: (addresses, port, packet) => nearby.send({ addresses, port, packet }),
+    async wayshipConnect(deviceName) {
+        const label = (deviceName?.trim() || 'Android').slice(0, 60);
+        const url = new URL('https://wayship.link/connect');
+        url.searchParams.set('app', 'zeta');
+        url.searchParams.set('name', 'Zeta');
+        url.searchParams.set('device_name', label);
+        const { Browser } = await import('@capacitor/browser');
+        await Browser.open({ url: url.toString() });
+        return { token: '', accountId: '', handle: '', connId: null, deviceName: label };
+    },
     updateStatus: async () => (await import('./updates')).updateRoutes.updateStatus(),
     checkForZetaUpdate: async () => (await import('./updates')).updateRoutes.checkForZetaUpdate(),
     applyZetaUpdate: async () => (await import('./updates')).updateRoutes.applyZetaUpdate(),
@@ -214,6 +224,7 @@ export const androidClient: Routes = {
     musicSearchPlaylists: providers.searchPlaylists,
     musicSearchAlbums: providers.searchAlbums,
     musicSearchVideos: providers.searchVideos,
+    musicVideoStream: providers.videoStream,
     async openMusicVideo(videoId) {
         if (!/^[\w-]{11}$/.test(videoId)) throw new Error('Invalid YouTube video ID.');
         const { Browser } = await import('@capacitor/browser');

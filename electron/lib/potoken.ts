@@ -137,6 +137,11 @@ async function getMinter(): Promise<WebPoMinter> {
     return (await pending).minter;
 }
 
+/** Clear the cached BotGuard minter so the next call mints a fresh integrity token. */
+export function invalidatePoToken(): void {
+    current = null;
+}
+
 /**
  * Mint a content-bound PoToken for a YouTube video id.
  *

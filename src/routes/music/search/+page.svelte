@@ -72,13 +72,9 @@
         isProtected: true,
     });
 
-    async function watchVideo(song: (typeof searchState.videos)[number]) {
-        try {
-            if (!song.id.startsWith("yt:")) throw new Error("This video cannot be opened.");
-            await client.openMusicVideo(song.id.slice(3));
-        } catch (error) {
-            toasts.error(error);
-        }
+    function watchVideo(song: (typeof searchState.videos)[number]) {
+        playTrack(playbackTrack(song));
+        ui.openNowPlaying("video");
     }
 </script>
 
@@ -180,7 +176,7 @@
                 <div class="section-head">
                     <div>
                         <h2 class="section-title">Music videos</h2>
-                        <span class="section-sub">Watch on YouTube</span>
+                        <span class="section-sub">Watch in player</span>
                     </div>
                     {#if searchState.videosLoading}
                         <span class="section-sub">Finding videos…</span>
@@ -192,12 +188,13 @@
                             <MediaCard
                                 title={video.title}
                                 artists={video.artists}
-                                subtitle="Watch on YouTube"
+                                subtitle="Music video"
                                 providerHint="yt"
                                 thumbnails={video.thumbnails}
                                 index={i}
                                 onclick={() => watchVideo(video)}
                                 onplay={() => watchVideo(video)}
+                                oncontextmenu={(e) => ui.openMenu(e, trackMenu(video))}
                             />
                         {/each}
                     </div>

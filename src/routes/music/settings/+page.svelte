@@ -18,7 +18,6 @@
     import AudioQualityPicker from '$lib/components/AudioQualityPicker.svelte';
 
     let browserProfiles = $state<Awaited<ReturnType<typeof client.listYoutubeBrowserProfiles>>>([]);
-    let selectedBrowserProfile = $state('');
     let loadingBrowserProfiles = $state(true);
 
     const activeBrowserProfile = $derived(browserProfiles.find(({ id }) => id === settingsState.youtubeBrowserProfileId));
@@ -27,7 +26,6 @@
         loadingBrowserProfiles = true;
         try {
             browserProfiles = await client.listYoutubeBrowserProfiles();
-            if (!browserProfiles.some(({ id }) => id === selectedBrowserProfile)) selectedBrowserProfile = '';
         } catch (error) {
             toasts.error(error);
         } finally {
@@ -132,6 +130,19 @@
                 <button class="switch" role="switch" aria-label="Keep screen awake" aria-checked={androidPreferences.keepAwake}
                     onclick={() => { androidPreferences.keepAwake = !androidPreferences.keepAwake; androidPreferences.save(); }}></button>
             </div>
+            <div class="row">
+                <div><strong>Home-screen widget theme</strong><p>Color the widget from the current track’s artwork or your Android Material You wallpaper palette.</p></div>
+                <div class="segmented">
+                    <button
+                        aria-pressed={androidPreferences.widgetTheme === 'artwork'}
+                        onclick={() => { androidPreferences.widgetTheme = 'artwork'; androidPreferences.save(); }}
+                    >Track artwork</button>
+                    <button
+                        aria-pressed={androidPreferences.widgetTheme === 'material'}
+                        onclick={() => { androidPreferences.widgetTheme = 'material'; androidPreferences.save(); }}
+                    >Material You</button>
+                </div>
+            </div>
         </div>
     </section>
     {/if}
@@ -182,40 +193,76 @@
     <section class="group">
         <h2><Icon name="play" /> YouTube</h2>
         <div class="card block">
-            <p class="muted">Select a signed-in browser profile or cookies file to use with yt-dlp for YouTube playback and downloads.</p>
-            <div class="btn-row">
-                <select class="input" aria-label="YouTube browser profile" bind:value={selectedBrowserProfile}
-                    disabled={loadingBrowserProfiles || !browserProfiles.length || settingsState.updatingYoutubeCookies}>
-                    <option value="">
-                        {loadingBrowserProfiles ? 'Looking for browsers…' : browserProfiles.length ? 'Choose a browser profile' : 'No browser profiles found'}
-                    </option>
-                    {#each browserProfiles as profile (profile.id)}
-                        <option value={profile.id}>{profile.browser} · {profile.name}</option>
-                    {/each}
-                </select>
-                <button class="btn"
-                    disabled={!selectedBrowserProfile || selectedBrowserProfile === settingsState.youtubeBrowserProfileId || settingsState.loading || settingsState.updatingYoutubeCookies}
-                    onclick={() => settingsState.useYoutubeBrowserProfile(selectedBrowserProfile)}>Use browser cookies</button>
-                <button class="btn" disabled={loadingBrowserProfiles} onclick={refreshBrowserProfiles}>Refresh browsers</button>
+            <div class="yt-head">
+                <p class="muted">Import YouTube cookies from a detected browser profile or choose a Netscape <code>cookies.txt</code> file for playback and downloads.</p>
+                <button class="btn" disabled={loadingBrowserProfiles} onclick={refreshBrowserProfiles}>
+                    <Icon name="refresh-cw" /> Refresh browsers
+                </button>
             </div>
+
+            {#if loadingBrowserProfiles}
+                <p class="subtle" role="status">Scanning installed browsers for YouTube sessions…</p>
+            {:else if !browserProfiles.length}
+                <p class="subtle" role="status">No browser profiles with cookies were detected on this computer.</p>
+            {:else}
+                <div class="browser-list" role="list" aria-label="Detected browser profiles">
+                    {#each browserProfiles as profile (profile.id)}
+                        {@const isActive = settingsState.youtubeBrowserProfileId === profile.id}
+                        <div class="browser-item" class:disabled={!profile.youtubeLoggedIn} class:active={isActive} role="listitem">
+                            <div class="browser-meta">
+                                <span class="browser-eyebrow">
+                                    {#if profile.youtubeLoggedIn}
+                                        {profile.email ?? 'Signed in to YouTube'}
+                                    {:else}
+                                        Cookies found · YouTube not logged in
+                                    {/if}
+                                </span>
+                                <strong>{profile.browser} · {profile.name}</strong>
+                            </div>
+                            <button
+                                class="btn"
+                                class:btn-primary={profile.youtubeLoggedIn && !isActive}
+                                disabled={!profile.youtubeLoggedIn || isActive || settingsState.loading || settingsState.updatingYoutubeCookies}
+                                onclick={() => settingsState.useYoutubeBrowserProfile(profile.id)}
+                            >
+                                {#if isActive}
+                                    <Icon name="check" /> Imported
+                                {:else if profile.youtubeLoggedIn}
+                                    Import cookies
+                                {:else}
+                                    Not signed in
+                                {/if}
+                            </button>
+                        </div>
+                    {/each}
+                </div>
+            {/if}
+
             {#if settingsState.youtubeBrowserProfileId}
                 <small class="subtle" role="status">
                     {activeBrowserProfile
-                        ? `Using ${activeBrowserProfile.browser} · ${activeBrowserProfile.name}`
+                        ? `Active browser cookies: ${activeBrowserProfile.browser} · ${activeBrowserProfile.name}${activeBrowserProfile.email ? ` (${activeBrowserProfile.email})` : ''}`
                         : loadingBrowserProfiles ? 'Checking saved browser profile…' : 'Saved browser profile is unavailable.'}
                 </small>
             {:else if settingsState.youtubeCookiesConfigured}
-                <small class="subtle" role="status">Using a cookies.txt file.</small>
+                <small class="subtle" role="status">Using a manual Netscape cookies.txt file.</small>
             {/if}
-            <div class="btn-row">
-                <button class="btn" disabled={settingsState.loading || settingsState.updatingYoutubeCookies}
-                    onclick={() => settingsState.updateYoutubeCookies()}>
-                    <Icon name="folder-open" /> Choose cookies.txt file
-                </button>
-                {#if settingsState.youtubeCookiesConfigured}
+
+            <div class="yt-manual">
+                <div>
+                    <strong>Manual Netscape cookies.txt</strong>
+                    <p class="subtle">Alternatively, import an exported Netscape-format <code>cookies.txt</code> file.</p>
+                </div>
+                <div class="btn-row">
                     <button class="btn" disabled={settingsState.loading || settingsState.updatingYoutubeCookies}
-                        onclick={() => settingsState.updateYoutubeCookies(true)}>Clear cookie source</button>
-                {/if}
+                        onclick={() => settingsState.updateYoutubeCookies()}>
+                        <Icon name="folder-open" /> Import cookies.txt
+                    </button>
+                    {#if settingsState.youtubeCookiesConfigured}
+                        <button class="btn" disabled={settingsState.loading || settingsState.updatingYoutubeCookies}
+                            onclick={() => settingsState.updateYoutubeCookies(true)}>Clear cookie source</button>
+                    {/if}
+                </div>
             </div>
         </div>
     </section>
@@ -418,7 +465,7 @@
             <p class="muted">Transfer your library, playlists, favourites, and listening history between desktop and Android. Import adds to your library.</p>
             <label class="muted">
                 <input type="checkbox" bind:checked={includeBackupAudio} disabled={settingsState.busyZetaBackup} />
-                Include downloaded audio (128 MiB backup limit)
+                Include downloaded audio (512 MiB backup limit)
             </label>
             <div class="btn-row">
                 <button class="btn" disabled={settingsState.busyZetaBackup || settingsState.busyMuzza !== false}
@@ -537,6 +584,66 @@
         display: flex;
         gap: 8px;
         flex-wrap: wrap;
+    }
+    .yt-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+    }
+    .yt-head p {
+        flex: 1;
+        min-width: 240px;
+    }
+    .browser-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+    .browser-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 12px 14px;
+        border-radius: var(--r-md);
+        background: rgb(255 255 255 / 0.04);
+        border: 1px solid var(--border);
+        transition: opacity 0.2s, border-color 0.2s, background 0.2s;
+    }
+    .browser-item.active {
+        border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+        background: color-mix(in srgb, var(--accent) 12%, transparent);
+    }
+    .browser-item.disabled {
+        opacity: 0.45;
+        filter: grayscale(0.85);
+    }
+    .browser-meta {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+    }
+    .browser-eyebrow {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--accent);
+    }
+    .browser-item.disabled .browser-eyebrow {
+        color: var(--text-3);
+    }
+    .yt-manual {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+        padding-top: 12px;
+        border-top: 1px solid var(--border);
     }
     .spin {
         display: inline-grid;

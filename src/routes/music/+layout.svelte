@@ -28,7 +28,7 @@
 
 <AmbientBackground
     intensity={ui.nowPlayingOpen ? 1 : 0}
-    hidden={ui.nowPlayingOpen && ui.nowPlayingMode !== "lyrics"}
+    hidden={ui.nowPlayingOpen && ui.nowPlayingMode !== "lyrics" && ui.nowPlayingMode !== "stage"}
 />
 
 {#if !isAndroid}<TitleBar hidden={ui.nowPlayingOpen} />{/if}

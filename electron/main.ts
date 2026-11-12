@@ -122,18 +122,41 @@ app.whenReady().then(() => {
 	});
 
 	// Chromium omits HTTP Referer for the packaged zeta-app: origin.
-	// YouTube requires an app identity on embed requests (error 153).
+	// YouTube requires an app identity on embed requests (error 153), and
+	// googlevideo.com streams need a YouTube Origin + CORS headers so the custom
+	// <video> player can sample frames onto a <canvas> for ambient lighting and
+	// black-bar cropping.
 	session.defaultSession.webRequest.onBeforeSendHeaders(
-		{ urls: ['https://www.youtube-nocookie.com/embed/*', 'https://www.youtube.com/embed/*'] },
+		{ urls: ['https://www.youtube-nocookie.com/embed/*', 'https://www.youtube.com/embed/*', 'https://*.googlevideo.com/*'] },
 		(details, callback) => {
 			const headers = details.requestHeaders;
-			if (details.resourceType === 'subFrame') {
+			if (details.url.includes('.googlevideo.com/')) {
+				for (const name of Object.keys(headers)) {
+					if (name.toLowerCase() === 'origin' || name.toLowerCase() === 'referer') delete headers[name];
+				}
+				headers.Origin = 'https://music.youtube.com';
+				headers.Referer = 'https://music.youtube.com/';
+			} else if (details.resourceType === 'subFrame') {
 				for (const name of Object.keys(headers)) {
 					if (name.toLowerCase() === 'referer') delete headers[name];
 				}
 				headers.Referer = 'https://com.zeta.z3/';
 			}
 			callback({ requestHeaders: headers });
+		},
+	);
+
+	session.defaultSession.webRequest.onHeadersReceived(
+		{ urls: ['https://*.googlevideo.com/*'] },
+		(details, callback) => {
+			const responseHeaders: Record<string, string | string[]> = { ...(details.responseHeaders ?? {}) };
+			for (const key of Object.keys(responseHeaders)) {
+				if (key.toLowerCase().startsWith('access-control-')) delete responseHeaders[key];
+			}
+			responseHeaders['Access-Control-Allow-Origin'] = ['*'];
+			responseHeaders['Access-Control-Allow-Headers'] = ['Range, *'];
+			responseHeaders['Access-Control-Expose-Headers'] = ['Content-Length, Content-Range, Accept-Ranges'];
+			callback({ responseHeaders });
 		},
 	);
 

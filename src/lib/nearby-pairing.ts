@@ -1,13 +1,23 @@
 const PREFIX = 'zeta-peer:2:';
 export const PAIRING_PACKET_LIMIT = 16_384;
 export const INVITE_LIFETIME = 120_000;
+export const DISCOVERY_PORT = 42534;
+
+export function isTailscaleAddress(address: string): boolean {
+    const parts = address.split('.');
+    if (parts.length !== 4 || parts.some((part) => !/^(0|[1-9]\d{0,2})$/.test(part) || Number(part) > 255)) return false;
+    const [first, second] = parts.map(Number);
+    // Tailscale uses the RFC 6598 CGNAT range 100.64.0.0/10.
+    return first === 100 && second >= 64 && second <= 127;
+}
 
 export function isNearbyAddress(address: string): boolean {
     const parts = address.split('.');
     if (parts.length !== 4 || parts.some((part) => !/^(0|[1-9]\d{0,2})$/.test(part) || Number(part) > 255)) return false;
     const [first, second] = parts.map(Number);
     return first === 10 || (first === 172 && second >= 16 && second <= 31) ||
-        (first === 192 && second === 168) || (first === 169 && second === 254);
+        (first === 192 && second === 168) || (first === 169 && second === 254) ||
+        (first === 100 && second >= 64 && second <= 127);
 }
 
 function base64(bytes: Uint8Array) {

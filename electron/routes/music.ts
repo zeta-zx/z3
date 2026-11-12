@@ -22,13 +22,14 @@ import type {
     ArtistDetails,
     CollectionDetails,
     SearchExtras,
+    VideoStreamInfo,
 } from '../../src/lib/schema';
 import { updateThumbnailUrl } from '../../src/lib/utils';
 import { COVER_SCHEME, coverUrl } from '../../src/lib/covers';
 
 import { createVFS, type VFS } from '../lib/vfs';
 import { getConfig, saveConfig } from '../lib/config';
-import { mintPoToken } from '../lib/potoken';
+import { invalidatePoToken, mintPoToken } from '../lib/potoken';
 import { downloadWithYtDlp, readYoutubeCookies } from '../lib/yt-dlp';
 import { findBrowserProfiles } from '../lib/browser-profiles';
 import { MetadataStore, embedMp4Tags, readAudioTags, type IndexRecord } from '../lib/metadata';
@@ -50,6 +51,7 @@ import {
     searchMusicAlbums,
     searchMusicExtras,
     searchMusicPlaylists,
+    searchMusicSongs,
     searchMusicVideos,
     ytSearchItems,
     ytToSong,
@@ -202,7 +204,13 @@ const YT_STREAM_CHUNK = 5 * 1024 * 1024;
  */
 async function streamRangedUrl(url: string, contentLength: number): Promise<ReadableStream<Uint8Array>> {
     const firstEnd = Math.min(YT_STREAM_CHUNK - 1, contentLength - 1);
-    const firstResponse = await fetch(`${url}&range=0-${firstEnd}`);
+    const firstResponse = await fetch(url, {
+        headers: {
+            Range: `bytes=0-${firstEnd}`,
+            Origin: 'https://music.youtube.com',
+            Referer: 'https://music.youtube.com/',
+        },
+    });
     if (!firstResponse.ok) {
         throw new Error(`YouTube stream returned ${firstResponse.status} for range 0-${firstEnd}`);
     }
@@ -221,7 +229,13 @@ async function streamRangedUrl(url: string, contentLength: number): Promise<Read
                 return;
             }
             const end = Math.min(position + YT_STREAM_CHUNK - 1, contentLength - 1);
-            const res = await fetch(`${url}&range=${position}-${end}`);
+            const res = await fetch(url, {
+                headers: {
+                    Range: `bytes=${position}-${end}`,
+                    Origin: 'https://music.youtube.com',
+                    Referer: 'https://music.youtube.com/',
+                },
+            });
             if (!res.ok) {
                 controller.error(new Error(`YouTube stream returned ${res.status} for range ${position}-${end}`));
                 return;
@@ -343,6 +357,15 @@ async function fetchYoutubeAudio(videoId: string, quality: AudioQuality): Promis
         await init();
         return await webStreamToBuffer(await downloadYtAudio(videoId, quality));
     } catch {
+        // Refresh the BotGuard minter and Innertube session once before falling back to yt-dlp.
+        try {
+            invalidatePoToken();
+            ytReady = null;
+            yt = await (ytReady = Innertube.create({}));
+            return await webStreamToBuffer(await downloadYtAudio(videoId, quality));
+        } catch {
+            /* fall through to yt-dlp */
+        }
         return downloadWithYtDlp(videoId, quality, { cookiesFile: null });
     }
 }
@@ -1084,27 +1107,53 @@ export const routes = {
 
     async musicSearch(query: string, provider: MusicProvider): Promise<Song[]> {
         await ensureStorage();
-
         const downloaded = new Set((await metadata.all()).filter((r) => r.file).map((r) => r.id));
+        return searchMusicSongs(async () => (await init(), yt.music), downloaded, query, provider);
+    },
 
-        switch (provider) {
-            case 'yt': {
-                await init();
-                const res = await yt.music.search(query, { type: 'song' });
+    async musicVideoStream(videoId: string): Promise<VideoStreamInfo> {
+        if (!/^[\w-]{11}$/.test(videoId)) throw new Error('Invalid YouTube video ID.');
+        await init();
+        const pot = await mintPoToken(videoId);
+        const info = await yt.getInfo(videoId, { client: 'YTMUSIC' }).catch(() => yt.getBasicInfo(videoId, { client: 'YTMUSIC' }));
+        const adaptive = info.streaming_data?.adaptive_formats ?? [];
+        const muxed = info.streaming_data?.formats ?? [];
 
-                return ytSearchItems(res, 'song', 'songs')
-                    .map((song) => ytToSong(song, downloaded))
-                    .filter((s): s is Song => s !== null);
-            }
+        // Prefer VP9 WebM (decoded natively by every Chromium/Electron build) up to 1080p,
+        // then H.264 MP4 adaptive, then progressive MP4.
+        const vp9 = adaptive
+            .filter((f: any) => f.has_video && !f.has_audio && f.mime_type?.includes('video/webm') && (f.height ?? 0) <= 1080)
+            .sort((a: any, b: any) => (b.height ?? 0) - (a.height ?? 0) || (b.bitrate ?? 0) - (a.bitrate ?? 0));
+        const mp4Video = adaptive
+            .filter((f: any) => f.has_video && !f.has_audio && f.mime_type?.includes('video/mp4') && (f.height ?? 0) <= 1080)
+            .sort((a: any, b: any) => (b.height ?? 0) - (a.height ?? 0) || (b.bitrate ?? 0) - (a.bitrate ?? 0));
+        const progVideo = muxed
+            .filter((f: any) => f.has_video && f.has_audio)
+            .sort((a: any, b: any) => (b.height ?? 0) - (a.height ?? 0));
 
-            case 'js': {
-                const res = await Saavn.search({ query, limit: 30 });
+        const videoFmt = vp9[0] ?? mp4Video[0] ?? progVideo[0];
+        if (!videoFmt) throw new Error('No playable video stream was found for this song.');
 
-                return res.results.map((s) => saavnToSong(s, downloaded));
+        const videoUrl = `${await videoFmt.decipher(yt.session.player)}&pot=${encodeURIComponent(pot)}`;
+        let audioUrl: string | undefined;
+        if (!videoFmt.has_audio) {
+            const audioFmts = adaptive
+                .filter((f: any) => f.has_audio && !f.has_video)
+                .sort((a: any, b: any) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
+            const audioFmt = audioFmts[0];
+            if (audioFmt) {
+                audioUrl = `${await audioFmt.decipher(yt.session.player)}&pot=${encodeURIComponent(pot)}`;
             }
         }
 
-        throw new Error(`Provider '${provider}' not supported for searching.`);
+        return {
+            videoId,
+            videoUrl,
+            audioUrl,
+            width: Number(videoFmt.width) || 1280,
+            height: Number(videoFmt.height) || 720,
+            duration: Number(info.basic_info?.duration) || 0,
+        };
     },
 
     async musicSearchExtras(query: string, provider: MusicProvider): Promise<SearchExtras> {
@@ -1641,12 +1690,22 @@ export const routes = {
     },
 
     async listYoutubeBrowserProfiles() {
-        return (await findBrowserProfiles()).map(({ id, browser, name }) => ({ id, browser, name }));
+        return (await findBrowserProfiles()).map(({ id, browser, name, youtubeLoggedIn, email }) => ({
+            id,
+            browser,
+            name,
+            youtubeLoggedIn,
+            email,
+        }));
     },
 
     async setYoutubeBrowserProfile(id: string): Promise<void> {
-        if (!(await findBrowserProfiles()).some((profile) => profile.id === id)) {
+        const profile = (await findBrowserProfiles()).find((item) => item.id === id);
+        if (!profile) {
             throw new Error('That browser profile is unavailable. Refresh the browser list and choose again.');
+        }
+        if (!profile.youtubeLoggedIn) {
+            throw new Error('YouTube is not signed in on that browser profile.');
         }
         saveConfig({ youtubeBrowserProfileId: id, youtubeCookiesFile: null });
     },
@@ -1693,7 +1752,7 @@ export const routes = {
         for (const record of await metadata.all()) songMap.set(record.id, MetadataStore.toSong(record));
 
         const likedIds = new Set<string>();
-        const playlists: { name: string; createdAt: number; trackIds: string[] }[] = [];
+        const playlists: { name: string; createdAt: number; thumbnail?: string; trackIds: string[] }[] = [];
 
         for (const playlist of library.playlists) {
             for (const track of playlist.tracks) if (!songMap.has(track.id)) songMap.set(track.id, track);
@@ -1704,6 +1763,7 @@ export const routes = {
                 playlists.push({
                     name: playlist.name,
                     createdAt: playlist.createdAt,
+                    thumbnail: backupImage(playlist.thumbnail),
                     trackIds: playlist.tracks.map((t) => t.id),
                 });
             }
@@ -1745,20 +1805,32 @@ export const routes = {
     async muzzaImportFrom(filePath: string): Promise<{ songs: number; playlists: number; liked: number }> {
         await ensureStorage();
 
-        if (statSync(filePath).size > MAX_BACKUP_BYTES) throw new Error('The Muzza backup exceeds 128 MiB.');
+        if (statSync(filePath).size > MAX_BACKUP_BYTES) throw new Error('The Muzza backup exceeds 512 MiB.');
         const imported = await parseMuzzaBackup(readFileSync(filePath));
 
         // 0. Preserve the raw backup so a future export can carry over ALL of
-        //    Muzza's data (settings, play history, search history, etc.). The
-        //    base becomes the authoritative history, so reset Zeta's own events.
+        //    Muzza's data (settings, play history, search history, etc.).
         await vfs.mkdir('.zeta/muzza');
         await vfs.writeFile(MUZZA_BASE_DB, Buffer.from(imported.db));
         if (imported.settings) await vfs.writeFile(MUZZA_BASE_SETTINGS, Buffer.from(imported.settings));
         else if (await vfs.exists(MUZZA_BASE_SETTINGS)) await vfs.unlink(MUZZA_BASE_SETTINGS).catch(() => {});
 
         // 1. Merge song metadata (never clobber an already-downloaded record).
+        //    If a Muzza song has a localPath on this machine with embedded cover art, carry it over.
         const toAdd: IndexRecord[] = [];
+        const importedNames: Record<string, { title: string; artists: string[]; thumbnailUrl?: string }> = {};
         for (const song of imported.songs) {
+            if (!song.record.thumbnails.some((t) => t.data?.length) && song.localPath) {
+                const tags = await readAudioTags(song.localPath).catch(() => null);
+                if (tags?.thumbnails?.length) {
+                    song.record.thumbnails = [...tags.thumbnails, ...song.record.thumbnails];
+                }
+            }
+            importedNames[song.zetaId] = {
+                title: song.record.title,
+                artists: song.record.artists.map((a) => a.name),
+                thumbnailUrl: song.record.thumbnails.find((t) => t.url && /^https?:\/\//i.test(t.url))?.url,
+            };
             const existing = await metadata.get(song.zetaId);
             if (existing?.file) continue;
             toAdd.push(song.record);
@@ -1783,7 +1855,7 @@ export const routes = {
             await writePlaylistEntries('favourites.m3u8', meta, blocks);
         });
 
-        // 3. Recreate playlists.
+        // 3. Recreate playlists (including custom/online playlist covers).
         for (const playlist of imported.playlists) {
             const created = await routes.musicPlaylistCreate(playlist.name);
             const tracks: Song[] = [];
@@ -1791,12 +1863,18 @@ export const routes = {
                 const record = await metadata.get(zetaId);
                 if (record) tracks.push(MetadataStore.toSong(record));
             }
-            await writePlaylist(created.id, tracks, await readPlaylistMeta(created.id));
+            const meta = await readPlaylistMeta(created.id);
+            if (playlist.thumbnail) meta.thumbnail = playlist.thumbnail;
+            await writePlaylist(created.id, tracks, meta);
         }
 
-        // Only now that everything merged: the imported base becomes the
-        // authoritative history, so reset Zeta's own events.
-        await stats.clear();
+        // 4. Carry over Muzza stats while keeping any non-duplicate Zeta stats and song display names.
+        const baseEvents = imported.events.map(({ zetaId, timestamp, playTimeMs }) => ({
+            songId: zetaId,
+            timestamp,
+            playTimeMs,
+        }));
+        await stats.mergeEvents([], baseEvents, importedNames);
 
         log('Imported Muzza backup', {
             songs: toAdd.length,
@@ -1852,7 +1930,7 @@ export const routes = {
     },
 
     async zetaImportFrom(filePath: string) {
-        if (statSync(filePath).size > MAX_BACKUP_BYTES) throw new Error('The backup exceeds 128 MiB.');
+        if (statSync(filePath).size > MAX_BACKUP_BYTES) throw new Error('The backup exceeds 512 MiB.');
         return routes.zetaImportBytes(readFileSync(filePath));
     },
 

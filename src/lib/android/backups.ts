@@ -17,7 +17,7 @@ const CHUNK_BYTES = 1024 * 1024;
 
 async function readBytes(directory: Directory, path: string): Promise<Uint8Array> {
     const { size } = await Filesystem.stat({ directory, path });
-    if (size > MAX_BACKUP_BYTES) throw new Error('The file exceeds 128 MiB.');
+    if (size > MAX_BACKUP_BYTES) throw new Error('The file exceeds 512 MiB.');
     const bytes = new Uint8Array(size);
     for (let offset = 0; offset < size; offset += CHUNK_BYTES) {
         const length = Math.min(CHUNK_BYTES, size - offset);
@@ -59,7 +59,7 @@ async function pickedBackup(): Promise<Uint8Array | null> {
 }
 
 async function saveBackup(bytes: Uint8Array, muzza: boolean): Promise<boolean> {
-    if (bytes.length > MAX_BACKUP_BYTES) throw new Error('The backup exceeds 128 MiB.');
+    if (bytes.length > MAX_BACKUP_BYTES) throw new Error('The backup exceeds 512 MiB.');
     const key = crypto.randomUUID();
     const path = `backups/${key}`;
     try {
@@ -259,6 +259,11 @@ async function muzzaImport() {
             data.muzzaBase = path;
             for (const { record } of imported.songs) {
                 if (!data.songs[record.id]) rememberSong(data, { song: { ...record, isDownloaded: false } });
+                data.names[record.id] ??= {
+                    title: record.title,
+                    artists: record.artists.map((a) => a.name),
+                    thumbnailUrl: record.thumbnails.find((t) => t.url)?.url,
+                };
             }
             mergeLists(data, imported.likedIds, playlists);
             data.events.push(...mergeBackupEvents(data.events, imported.events.map(({ zetaId, ...event }) => ({ songId: zetaId, ...event }))));

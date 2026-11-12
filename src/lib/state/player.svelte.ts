@@ -219,7 +219,7 @@ export function getUpcomingTrack(): Song | null {
     return autoplayCandidate();
 }
 
-export function getUpcomingTracks(limit = 2): Song[] {
+export function getUpcomingTracks(limit = 1): Song[] {
     const first = getUpcomingTrack();
     const candidates = [
         ...(first ? [first] : []), ...playerState.upNext, ...getUpcomingContext(limit),
