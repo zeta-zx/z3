@@ -118,8 +118,10 @@ public class ZetaPlaybackWidget extends AppWidgetProvider {
             if (!target.equals(cachedArtUri)) return;
             cachedArtBitmap = decoded;
             extractArtworkColors(decoded);
-            if (PlaybackService.active != null) PlaybackService.active.updateWidget();
-            else refresh(appContext, null);
+            new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+                if (PlaybackService.active != null) PlaybackService.active.updateWidget();
+                else refresh(appContext, null);
+            });
         });
     }
 
@@ -139,53 +141,55 @@ public class ZetaPlaybackWidget extends AppWidgetProvider {
     }
 
     static void refresh(Context context, Player player) {
-        var manager = AppWidgetManager.getInstance(context);
-        var component = new ComponentName(context, ZetaPlaybackWidget.class);
-        if (manager.getAppWidgetIds(component).length == 0) return;
-        RemoteViews view = new RemoteViews(context.getPackageName(), R.layout.zeta_widget);
-        var metadata = player == null ? null : player.getMediaMetadata();
-        ensureArtworkLoaded(context.getApplicationContext(), metadata == null ? null : metadata.artworkUri);
+        try {
+            var manager = AppWidgetManager.getInstance(context);
+            var component = new ComponentName(context, ZetaPlaybackWidget.class);
+            if (manager.getAppWidgetIds(component).length == 0) return;
+            RemoteViews view = new RemoteViews(context.getPackageName(), R.layout.zeta_widget);
+            var metadata = player == null ? null : player.getMediaMetadata();
+            ensureArtworkLoaded(context.getApplicationContext(), metadata == null ? null : metadata.artworkUri);
 
-        boolean useMaterialYou = "material".equals(getTheme(context)) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S;
-        int bgColor = 0xFF171222;
-        int titleColor = 0xFFFFFFFF;
-        int artistColor = 0xFFD1C5DF;
-        if (useMaterialYou) {
-            bgColor = context.getColor(android.R.color.system_neutral1_900);
-            titleColor = context.getColor(android.R.color.system_accent1_100);
-            artistColor = context.getColor(android.R.color.system_neutral2_200);
-        } else if (cachedArtBitmap != null) {
-            bgColor = cachedBgColor;
-            artistColor = cachedAccentColor;
-        }
+            boolean useMaterialYou = "material".equals(getTheme(context)) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S;
+            int bgColor = 0xFF171222;
+            int titleColor = 0xFFFFFFFF;
+            int artistColor = 0xFFD1C5DF;
+            if (useMaterialYou) {
+                bgColor = context.getColor(android.R.color.system_neutral1_900);
+                titleColor = context.getColor(android.R.color.system_accent1_100);
+                artistColor = context.getColor(android.R.color.system_neutral2_200);
+            } else if (cachedArtBitmap != null) {
+                bgColor = cachedBgColor;
+                artistColor = cachedAccentColor;
+            }
 
-        view.setInt(R.id.widget_root, "setBackgroundColor", bgColor);
-        view.setTextColor(R.id.widget_title, titleColor);
-        view.setTextColor(R.id.widget_artist, artistColor);
-        if (cachedArtBitmap != null) {
-            view.setViewVisibility(R.id.widget_artwork, View.VISIBLE);
-            view.setImageViewBitmap(R.id.widget_artwork, cachedArtBitmap);
-        } else {
-            view.setViewVisibility(R.id.widget_artwork, View.GONE);
-        }
+            view.setInt(R.id.widget_root, "setBackgroundColor", bgColor);
+            view.setTextColor(R.id.widget_title, titleColor);
+            view.setTextColor(R.id.widget_artist, artistColor);
+            if (cachedArtBitmap != null) {
+                view.setViewVisibility(R.id.widget_artwork, View.VISIBLE);
+                view.setImageViewBitmap(R.id.widget_artwork, cachedArtBitmap);
+            } else {
+                view.setViewVisibility(R.id.widget_artwork, View.GONE);
+            }
 
-        view.setTextViewText(R.id.widget_title, metadata != null && metadata.title != null ? metadata.title : "Zeta");
-        view.setTextViewText(R.id.widget_artist, metadata != null && metadata.artist != null ? metadata.artist : "Tap play to open Zeta");
-        view.setImageViewResource(R.id.widget_toggle, player != null && player.getPlayWhenReady() && player.getPlaybackState() != Player.STATE_ENDED
-            ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play);
-        int flags = PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT;
-        var open = PendingIntent.getActivity(context, 0, new Intent(context, MainActivity.class), flags);
-        view.setOnClickPendingIntent(R.id.widget_title, open);
-        view.setOnClickPendingIntent(R.id.widget_artist, open);
-        view.setOnClickPendingIntent(R.id.widget_artwork, open);
-        int[] buttons = { R.id.widget_previous, R.id.widget_toggle, R.id.widget_next };
-        String[] actions = { "previous", "toggle", "next" };
-        for (int index = 0; index < buttons.length; index++) {
-            view.setInt(buttons[index], "setBackgroundColor", bgColor);
-            view.setInt(buttons[index], "setColorFilter", titleColor);
-            var intent = new Intent(context, ZetaWidgetActionActivity.class).putExtra("control", actions[index]);
-            view.setOnClickPendingIntent(buttons[index], PendingIntent.getActivity(context, index + 1, intent, flags));
-        }
-        manager.updateAppWidget(component, view);
+            view.setTextViewText(R.id.widget_title, metadata != null && metadata.title != null ? metadata.title : "Zeta");
+            view.setTextViewText(R.id.widget_artist, metadata != null && metadata.artist != null ? metadata.artist : "Tap play to open Zeta");
+            view.setImageViewResource(R.id.widget_toggle, player != null && player.getPlayWhenReady() && player.getPlaybackState() != Player.STATE_ENDED
+                ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play);
+            int flags = PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT;
+            var open = PendingIntent.getActivity(context, 0, new Intent(context, MainActivity.class), flags);
+            view.setOnClickPendingIntent(R.id.widget_title, open);
+            view.setOnClickPendingIntent(R.id.widget_artist, open);
+            view.setOnClickPendingIntent(R.id.widget_artwork, open);
+            int[] buttons = { R.id.widget_previous, R.id.widget_toggle, R.id.widget_next };
+            String[] actions = { "previous", "toggle", "next" };
+            for (int index = 0; index < buttons.length; index++) {
+                view.setInt(buttons[index], "setBackgroundColor", bgColor);
+                view.setInt(buttons[index], "setColorFilter", titleColor);
+                var intent = new Intent(context, ZetaWidgetActionActivity.class).putExtra("control", actions[index]);
+                view.setOnClickPendingIntent(buttons[index], PendingIntent.getActivity(context, index + 1, intent, flags));
+            }
+            manager.updateAppWidget(component, view);
+        } catch (Throwable ignored) {}
     }
 }

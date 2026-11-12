@@ -1,5 +1,6 @@
 <script lang="ts">
     import Icon from "$lib/components/Icon.svelte";
+    import { updates } from "$lib/state/updates.svelte";
 
     const options = [
         { name: "Music", href: "/music", icon: "audio-lines", enabled: true, hue: 262 },
@@ -15,6 +16,12 @@
         <span class="mark"><Icon name="audio-lines" /></span>
         <h1>Welcome to <span>Zeta</span></h1>
         <p>Media for all. What do you want to check out?</p>
+        {#if ["available", "ready", "manual"].includes(updates.status.phase) && updates.status.version}
+            <button class="btn btn-primary" style="margin-top: 10px" disabled={updates.applying} onclick={() => updates.apply()}>
+                <Icon name="download" />
+                {updates.status.phase === "ready" ? `Restart to install Zeta ${updates.status.version}` : `Update to Zeta ${updates.status.version}`}
+            </button>
+        {/if}
     </header>
 
     <div class="tiles">

@@ -240,7 +240,15 @@ public class PlaybackService extends MediaLibraryService {
     }
 
     void updateWidget() {
-        ZetaPlaybackWidget.refresh(this, session == null ? null : session.getPlayer());
+        if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
+            new android.os.Handler(android.os.Looper.getMainLooper()).post(this::updateWidget);
+            return;
+        }
+        try {
+            ZetaPlaybackWidget.refresh(this, session == null ? null : session.getPlayer());
+        } catch (Exception error) {
+            Log.w(TAG, "Could not update playback widget.", error);
+        }
     }
 
     boolean widgetAction(String action) {

@@ -231,10 +231,14 @@ public class ZetaPlayerPlugin extends Plugin {
     @PluginMethod public void setWidgetTheme(PluginCall call) {
         String theme = "material".equals(call.getString("theme")) ? "material" : "artwork";
         ZetaPlaybackWidget.setTheme(getContext(), theme);
-        PlaybackService service = PlaybackService.active;
-        if (service != null) service.updateWidget();
-        else ZetaPlaybackWidget.refresh(getContext(), null);
-        call.resolve();
+        getActivity().runOnUiThread(() -> {
+            try {
+                PlaybackService service = PlaybackService.active;
+                if (service != null) service.updateWidget();
+                else ZetaPlaybackWidget.refresh(getContext(), null);
+            } catch (Exception ignored) {}
+            call.resolve();
+        });
     }
 
     private void emitState() {
