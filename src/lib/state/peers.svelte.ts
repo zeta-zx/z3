@@ -83,8 +83,11 @@ class Peers {
             if (link.backupAudio !== undefined) {
                 void this.sendBackup(link.id).catch((error) => toasts.error(error));
             } else {
-                // Automatically sync listening stats, favourites, and playlists across paired devices.
-                void this.syncLibrary(link.id).catch(() => {});
+                // The host sends first. The joining device replies after it
+                // has imported that transfer, avoiding two binary streams
+                // colliding on the same ordered data channel.
+                if (link.host) void this.syncLibrary(link.id, true).catch(() => {});
+                if (!link.host && link.mode === 'remote') this.following = true;
             }
         };
         channel.onclose = () => this.disconnect(link.id);
@@ -373,6 +376,7 @@ class Peers {
             if (sync.offset === sync.bytes.length && await digest(Uint8Array.from(sync.bytes)) === sync.digest) {
                 await client.zetaImportBytes(sync.bytes);
                 await libraryState.refresh();
+                if (!link.host) void this.syncLibrary(link.id, true).catch(() => {});
             }
             return;
         }

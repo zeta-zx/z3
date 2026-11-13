@@ -208,14 +208,8 @@ class WayshipState {
         this.onlinePeers = out.peers.filter((p) => p.peer_id !== this.peerId);
         if (out.ice_servers?.length) this.iceServers = out.ice_servers;
 
-        // Automatically establish P2P sync with newly discovered online sibling devices.
-        for (const peer of this.onlinePeers) {
-            if (this.autoConnectedPeers.has(peer.peer_id)) continue;
-            this.autoConnectedPeers.add(peer.peer_id);
-            if (this.peerId < peer.peer_id) {
-                void this.connectPeer(peer.peer_id, 'remote').catch(() => {});
-            }
-        }
+        // Discovery is passive; the user chooses which device to connect.
+        this.autoConnectedPeers.clear();
     }
 
     private async poll() {
@@ -254,12 +248,6 @@ class WayshipState {
                         updated_at: ev.ts || Date.now(),
                     },
                 ];
-            }
-            if (!this.autoConnectedPeers.has(ev.from_peer)) {
-                this.autoConnectedPeers.add(ev.from_peer);
-                if (this.peerId < ev.from_peer) {
-                    void this.connectPeer(ev.from_peer, 'remote').catch(() => {});
-                }
             }
             return;
         }

@@ -300,7 +300,6 @@
         </div>
 
         <div class="tail">
-            <button class="icon-btn sm" title="Keyboard shortcuts (?)" onclick={() => (ui.shortcutsOpen = true)}><Icon name="keyboard" /></button>
             <a class="icon-btn sm" class:on={isActive("/music/settings")} aria-label="Settings" title="Settings" href="/music/settings">
                 <Icon name="settings-2" />
                 <span class="android-nav-label">Settings</span>
@@ -832,7 +831,6 @@
         }
     }
     :global([data-os="android"]) .arrows,
-    :global([data-os="android"]) .tail > button,
     :global([data-os="android"]) .mark { display: none; }
 
     @media (max-width: 600px) {

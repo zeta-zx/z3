@@ -202,9 +202,40 @@ export const androidClient: Routes = {
         url.searchParams.set('app', 'zeta');
         url.searchParams.set('name', 'Zeta');
         url.searchParams.set('device_name', label);
+        const state = crypto.randomUUID();
+        url.searchParams.set('redirect', 'zeta://wayship/callback');
+        url.searchParams.set('state', state);
         const { Browser } = await import('@capacitor/browser');
-        await Browser.open({ url: url.toString() });
-        return { token: '', accountId: '', handle: '', connId: null, deviceName: label };
+        const { App } = await import('@capacitor/app');
+        let listener: PluginListenerHandle | undefined;
+        let listenerPromise: Promise<PluginListenerHandle> | undefined;
+        try {
+            const callback = new Promise<{ token: string; accountId: string; handle: string; connId: number | null; deviceName: string }>((resolve, reject) => {
+                const timeout = setTimeout(() => reject(new Error('Wayship sign-in timed out.')), 180_000);
+                listenerPromise = App.addListener('appUrlOpen', ({ url: callbackUrl }) => {
+                    try {
+                        const parsed = new URL(callbackUrl);
+                        if (parsed.protocol !== 'zeta:' || parsed.hostname !== 'wayship' || parsed.pathname !== '/callback') return;
+                        if (parsed.searchParams.get('state') !== state) return;
+                        const token = parsed.searchParams.get('token') || '';
+                        if (!token.startsWith('wsa_')) throw new Error('Wayship returned an invalid app token.');
+                        clearTimeout(timeout);
+                        resolve({
+                            token,
+                            accountId: parsed.searchParams.get('account_id') || '',
+                            handle: parsed.searchParams.get('handle') || '',
+                            connId: Number(parsed.searchParams.get('conn_id')) || null,
+                            deviceName: label,
+                        });
+                    } catch (error) { clearTimeout(timeout); reject(error); }
+                }).then((handle) => { listener = handle; return handle; });
+            });
+            await Browser.open({ url: url.toString() });
+            return await callback;
+        } finally {
+            await (listener ?? await listenerPromise?.catch(() => undefined))?.remove().catch(() => {});
+            await Browser.close().catch(() => {});
+        }
     },
     updateStatus: async () => (await import('./updates')).updateRoutes.updateStatus(),
     checkForZetaUpdate: async () => (await import('./updates')).updateRoutes.checkForZetaUpdate(),

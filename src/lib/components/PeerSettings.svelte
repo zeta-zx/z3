@@ -187,25 +187,19 @@
                                 <strong>{wp.device_name || 'Zeta device'}</strong>
                                 <small class="muted">{linked ? `Connected (${linked.mode})` : 'Online on Wayship'}</small>
                             </div>
-                            <div class="buttons">
-                                <button class="btn" onclick={() => run(() => wayship.connectPeer(wp.peer_id, 'remote', includeAudio))}>
-                                    Sync &amp; Remote
-                                </button>
-                                <button class="btn" onclick={() => run(() => wayship.connectPeer(wp.peer_id, 'party', includeAudio))}>
-                                    Play Together
-                                </button>
-                                <button class="btn" onclick={() => run(() => wayship.connectPeer(wp.peer_id, 'backup', includeAudio))}>
-                                    Send Backup
-                                </button>
-                            </div>
+                            <button class="btn btn-primary" disabled={!!linked} onclick={() => run(() => wayship.connectPeer(wp.peer_id, 'remote'))}>
+                                {linked ? 'Connected' : 'Connect'}
+                            </button>
                         </div>
                     {/each}
                 </div>
             {:else}
-                <p class="muted">No other Zeta devices are online on your Wayship account right now. Open Zeta and connect Wayship on another device to auto-sync.</p>
+                    <p class="muted">No other Zeta devices are online on your Wayship account right now. Open Zeta and connect Wayship on another device, then it will appear here.</p>
             {/if}
         {:else}
-            <form class="invitation" onsubmit={(e) => {
+            <details class="invitation">
+                <summary>Already have a Wayship token?</summary>
+                <form onsubmit={(e) => {
                 e.preventDefault();
                 void run(async () => {
                     await wayship.useToken(wayshipTokenInput);
@@ -218,23 +212,18 @@
                         placeholder="wsa_…" spellcheck={false} autocomplete="off" autocapitalize="off" />
                     <button class="btn" type="submit" disabled={!wayshipTokenInput.trim()}>Save token</button>
                 </div>
-            </form>
+                </form>
+            </details>
         {/if}
     </div>
 
     <hr class="peer-divider" />
 
-    <h2>Nearby &amp; Tailscale devices</h2>
-    <p class="muted">Tap a mode on both devices to pair automatically over Wi-Fi/LAN or Tailscale, or scan/paste the invitation code.</p>
+    <h2>Nearby devices</h2>
+    <p class="muted">Use this when both devices are on the same Wi-Fi network. Connect once, then Zeta syncs playback and library data.</p>
     <div class="buttons">
-        <button class="btn btn-primary" disabled={!!peers.pending || peers.busy || joining} onclick={() => invite('party')}>
-            Pair &amp; Play Together
-        </button>
-        <button class="btn" disabled={!!peers.pending || peers.busy || joining} onclick={() => invite('remote')}>
-            Pair Remote &amp; Sync
-        </button>
-        <button class="btn" disabled={!!peers.pending || peers.busy || joining} onclick={() => invite('backup')}>
-            Send Zeta backup
+        <button class="btn btn-primary" disabled={!!peers.pending || peers.busy || joining} onclick={() => invite('remote')}>
+            Connect nearby device
         </button>
     </div>
     {#if peers.pending}
@@ -253,7 +242,9 @@
         </div>
     {/if}
     {#if !peers.pending && !joining}
-        <form class="invitation" onsubmit={(event) => { event.preventDefault(); void run(() => useCode(code)); }}>
+        <details class="invitation">
+        <summary>Use a QR code or invitation code</summary>
+        <form onsubmit={(event) => { event.preventDefault(); void run(() => useCode(code)); }}>
             <label for="peer-code">Invitation code</label>
             <div class="code-row">
                 <input class="input" id="peer-code" type="text" bind:value={code} placeholder="Paste invitation code"
@@ -274,6 +265,7 @@
                 }} />
             </label>
         </div>
+        </details>
     {:else if joining && !peers.pending}
         <p role="status">Connecting to the host…</p>
     {/if}

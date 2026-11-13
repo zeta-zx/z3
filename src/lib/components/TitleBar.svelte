@@ -7,6 +7,8 @@
      */
     import { client } from "$lib/ephaptic";
     import Icon from "$lib/components/Icon.svelte";
+    import { wayship } from "$lib/state/wayship.svelte";
+    import { peers } from "$lib/state/peers.svelte";
     import { onMount } from "svelte";
 
     let { hidden = false }: { hidden?: boolean } = $props();
@@ -64,11 +66,15 @@
     }
 </script>
 
-<header class="titlebar" class:hidden aria-hidden="true">
+<header class="titlebar" class:hidden>
     <div class="brand">
         <span class="mark">ζ</span>
         <span class="name">Zeta</span>
     </div>
+    <a class="wayship-indicator" href="/music/settings" title={wayship.connected ? 'Wayship device connected' : 'Connect a phone with Wayship'}>
+        <Icon name="smartphone" />
+        {#if peers.links.some((link) => link.connected && !!link.wayshipPeerId)}<span class="online-dot" aria-label="Wayship device online"></span>{/if}
+    </a>
 </header>
 
 {#if linux}
@@ -149,6 +155,28 @@
         font-weight: 750;
         letter-spacing: 0.02em;
         color: var(--text-2);
+    }
+    .wayship-indicator {
+        margin-left: auto;
+        position: relative;
+        display: grid;
+        place-items: center;
+        width: 28px;
+        height: 28px;
+        color: var(--text-2);
+        -webkit-app-region: no-drag;
+    }
+    .wayship-indicator:hover { color: var(--text); }
+    .wayship-indicator :global(svg) { width: 15px; height: 15px; }
+    .online-dot {
+        position: absolute;
+        right: 2px;
+        top: 3px;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #34d399;
+        box-shadow: 0 0 7px #34d399;
     }
 
     .window-edge {
