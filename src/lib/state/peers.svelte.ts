@@ -114,6 +114,9 @@ class Peers {
             link.connected = true;
             if (link.connectTimeout) clearTimeout(link.connectTimeout);
             link.connectTimeout = undefined;
+            // Reassign the collection so connection status updates immediately
+            // in the Wayship device list and title-bar indicator.
+            this.links = [...this.links];
             this.closeListener(link.id);
             if (this.pending?.id === link.id) this.pending = null;
             if (link.backupAudio !== undefined) {
