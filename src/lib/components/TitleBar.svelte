@@ -16,6 +16,8 @@
     // Only Linux draws its own window buttons; macOS and Windows use the native ones.
     const linux = typeof document !== "undefined" && document.documentElement.dataset.os === "linux";
     let maximized = $state(false);
+    const wayshipLink = $derived(peers.links.find((link) => !!link.wayshipPeerId));
+    const wayshipStatus = $derived(wayshipLink?.connected ? 'Synced' : wayshipLink ? 'Connecting…' : wayship.connected ? 'Online' : 'Offline');
 
     $effect(() => {
         if (typeof document === "undefined") return;
@@ -71,9 +73,9 @@
         <span class="mark">ζ</span>
         <span class="name">Zeta</span>
     </div>
-    <a class="wayship-indicator" href="/music/settings" title={peers.links.some((link) => link.connected && !!link.wayshipPeerId) ? 'Wayship device connected and synced' : wayship.connected ? 'Wayship account connected; connect a device' : 'Connect a phone with Wayship'}>
+    <a class="wayship-indicator {wayshipStatus.toLowerCase().replace('…', '')}" href="/music/settings" title={`Wayship: ${wayshipStatus}`} aria-label={`Wayship: ${wayshipStatus}`}>
         <Icon name="smartphone" />
-        {#if peers.links.some((link) => link.connected && !!link.wayshipPeerId)}<span class="online-dot" aria-label="Wayship device online"></span>{/if}
+        <span class="wayship-label">{wayshipStatus}</span>
     </a>
 </header>
 
@@ -168,15 +170,24 @@
     }
     .wayship-indicator:hover { color: var(--text); }
     .wayship-indicator :global(svg) { width: 15px; height: 15px; }
-    .online-dot {
+    .wayship-indicator.synced { color: #34d399; }
+    .wayship-indicator.connecting { color: #fbbf24; }
+    .wayship-indicator.offline { color: var(--text-3); }
+    .wayship-label {
+        font-size: 10px;
+        font-weight: 650;
+        margin-left: 5px;
+    }
+    .wayship-indicator.synced::after,
+    .wayship-indicator.connecting::after {
         position: absolute;
         right: 2px;
         top: 3px;
         width: 6px;
         height: 6px;
         border-radius: 50%;
-        background: #34d399;
-        box-shadow: 0 0 7px #34d399;
+        background: currentColor;
+        box-shadow: 0 0 7px currentColor;
     }
 
     .window-edge {
