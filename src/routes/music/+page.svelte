@@ -149,7 +149,9 @@
             const [lastfmTaste, similarArtists, summary] = await Promise.allSettled([
                 client.scrobbleTaste(),
                 client.scrobbleSimilarArtists(),
-                client.statsSummary(500),
+                // Use a broad history window. Recommendations should reflect
+                // the listener's catalogue over time, not one recent track.
+                client.statsSummary(2000),
             ]);
             if (lastfmTaste.status === "fulfilled") lastfmSongs = lastfmTaste.value.map(lastfmSong);
             else toasts.error(lastfmTaste.reason);
@@ -167,8 +169,12 @@
         const saved = [...libraryState.tracks.values()];
         heardSongs = [...history, ...frequent, ...lastfmSongs, ...saved, ...(playerState.currentTrack ? [playerState.currentTrack] : [])];
         const usingLastfm = lastfmSongs.length > 0;
-        const seeds = selectTasteSeeds(usingLastfm ? lastfmSongs : [...history, ...frequent, ...saved], 8);
-        recommendationSource = usingLastfm ? "your Last.fm taste" : "your listening history";
+        // Mix weighted favourites/top plays, broad recent history, imported
+        // Last.fm taste, and the saved library. Last.fm is an extra signal,
+        // never a replacement for Zeta's own listening history.
+        const tasteProfile = [...frequent, ...history, ...lastfmSongs, ...saved];
+        const seeds = selectTasteSeeds(tasteProfile, 12);
+        recommendationSource = usingLastfm ? "your listening history and Last.fm taste" : "your listening history";
         if (!seeds.length) {
             recommendations = [];
             recommendationsLoading = false;
@@ -177,16 +183,15 @@
         }
 
         const listenedArtists = new Set(heardSongs.flatMap((song) => song.artists.map((artist) => artist.name.toLowerCase())));
-        let similarArtistNames = [...new Set(lastfmArtists)].filter((name) => !listenedArtists.has(name.toLowerCase()));
-        if (!similarArtistNames.length) {
-            const artistSeeds = selectTasteSeeds(seeds, 6)
-                .map((song) => song.artists[0]?.name)
-                .filter((name): name is string => !!name);
-            const similarResults = await Promise.allSettled(artistSeeds.map((name) => client.musicArtist(name)));
-            similarArtistNames = [...new Set(similarResults.flatMap((result) =>
-                result.status === "fulfilled" ? result.value.similarArtists.map((artist) => artist.name) : [],
-            ))].filter((name) => !listenedArtists.has(name.toLowerCase()));
-        }
+        const artistSeeds = selectTasteSeeds(tasteProfile, 12)
+            .map((song) => song.artists[0]?.name)
+            .filter((name): name is string => !!name);
+        const similarResults = await Promise.allSettled(artistSeeds.map((name) => client.musicArtist(name)));
+        const localSimilarNames = similarResults.flatMap((result) =>
+            result.status === "fulfilled" ? result.value.similarArtists.map((artist) => artist.name) : [],
+        );
+        const similarArtistNames = [...new Set([...lastfmArtists, ...localSimilarNames])]
+            .filter((name) => !listenedArtists.has(name.toLowerCase()));
 
         const artistResults = await Promise.allSettled(similarArtistNames.slice(0, 8).map((name) => client.musicArtist(name)));
         if (request !== recommendationRequest) return;
