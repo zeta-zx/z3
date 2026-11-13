@@ -54,6 +54,14 @@ class Peers {
     private listenerId: string | undefined;
     private incoming: IncomingBackup | null = null;
     private timer: ReturnType<typeof setInterval> | undefined;
+    private pendingIce = new Map<string, RTCIceCandidateInit[]>();
+
+    private async flushIce(id: string, peer: RTCPeerConnection) {
+        const queued = this.pendingIce.get(id);
+        if (!queued?.length || !peer.remoteDescription) return;
+        this.pendingIce.delete(id);
+        for (const candidate of queued) await peer.addIceCandidate(candidate).catch(() => {});
+    }
 
     private startBroadcast() {
         if (this.timer) return;
@@ -272,19 +280,34 @@ class Peers {
             };
 
             await peer.setRemoteDescription({ type: 'offer', sdp: payload.sdp });
+            await this.flushIce(id, peer);
             const answer = await peer.createAnswer();
             await peer.setLocalDescription(answer);
             await sendSignal(remotePeerId, 'answer', { sdp: peer.localDescription?.sdp, mode });
             return;
         }
         const link = this.links.find((l) => l.id === id);
-        if (!link) return;
+        if (!link) {
+            if (kind === 'ice' && payload && typeof payload.candidate === 'string') {
+                const queued = this.pendingIce.get(id) ?? [];
+                queued.push(payload);
+                this.pendingIce.set(id, queued);
+            }
+            return;
+        }
         if (kind === 'answer' && payload && typeof payload.sdp === 'string') {
             if (link.peer.signalingState === 'have-local-offer') {
                 await link.peer.setRemoteDescription({ type: 'answer', sdp: payload.sdp });
+                await this.flushIce(id, link.peer);
             }
         } else if (kind === 'ice' && payload && typeof payload.candidate === 'string') {
-            await link.peer.addIceCandidate(payload).catch(() => {});
+            if (!link.peer.remoteDescription) {
+                const queued = this.pendingIce.get(id) ?? [];
+                queued.push(payload);
+                this.pendingIce.set(id, queued);
+            } else {
+                await link.peer.addIceCandidate(payload).catch(() => {});
+            }
         }
     }
 
@@ -293,6 +316,7 @@ class Peers {
         if (!link) return;
         this.closeListener(id);
         this.links = this.links.filter((item) => item.id !== id);
+        this.pendingIce.delete(id);
         if (this.pending?.id === id) this.pending = null;
         if (!link.host) { this.remote = null; this.following = false; }
         if (this.incoming?.id === id) { this.incoming = null; this.progress = null; }

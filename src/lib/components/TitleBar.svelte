@@ -71,7 +71,7 @@
         <span class="mark">ζ</span>
         <span class="name">Zeta</span>
     </div>
-    <a class="wayship-indicator" href="/music/settings" title={wayship.connected ? 'Wayship device connected' : 'Connect a phone with Wayship'}>
+    <a class="wayship-indicator" href="/music/settings" title={peers.links.some((link) => link.connected && !!link.wayshipPeerId) ? 'Wayship device connected and synced' : wayship.connected ? 'Wayship account connected; connect a device' : 'Connect a phone with Wayship'}>
         <Icon name="smartphone" />
         {#if peers.links.some((link) => link.connected && !!link.wayshipPeerId)}<span class="online-dot" aria-label="Wayship device online"></span>{/if}
     </a>

@@ -180,15 +180,16 @@
             {#if wayship.onlinePeers.length}
                 <div class="wayship-peers" role="list" aria-label="Online Wayship devices">
                     {#each wayship.onlinePeers as wp (wp.peer_id)}
-                        {@const linked = peers.links.find((l) => l.wayshipPeerId === wp.peer_id && l.connected)}
+                        {@const linked = peers.links.find((l) => l.wayshipPeerId === wp.peer_id)}
+                        {@const connected = linked?.connected === true}
                         <div class="wayship-peer" role="listitem">
                             <div class="wayship-peer-info">
                                 <span class="pulse-dot" aria-hidden="true"></span>
                                 <strong>{wp.device_name || 'Zeta device'}</strong>
-                                <small class="muted">{linked ? `Connected (${linked.mode})` : 'Online on Wayship'}</small>
+                                <small class="muted">{connected ? 'Connected · synced' : linked ? 'Connecting…' : 'Online on Wayship'}</small>
                             </div>
-                            <button class="btn btn-primary" disabled={!!linked} onclick={() => run(() => wayship.connectPeer(wp.peer_id, 'remote'))}>
-                                {linked ? 'Connected' : 'Connect'}
+                            <button class="btn" class:btn-primary={!linked} disabled={connected || !!linked} onclick={() => run(() => wayship.connectPeer(wp.peer_id, 'remote'))}>
+                                {connected ? 'Connected' : linked ? 'Connecting…' : 'Connect'}
                             </button>
                         </div>
                     {/each}
