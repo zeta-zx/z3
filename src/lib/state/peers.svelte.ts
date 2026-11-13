@@ -71,7 +71,7 @@ class Peers {
         for (const candidate of queued) await peer.addIceCandidate(candidate).catch(() => {});
     }
 
-    private waitForIceGathering(peer: RTCPeerConnection, timeoutMs = 5000): Promise<void> {
+    private waitForIceGathering(peer: RTCPeerConnection, timeoutMs = 1500): Promise<void> {
         if (peer.iceGatheringState === 'complete') return Promise.resolve();
         return new Promise((resolve) => {
             const timer = setTimeout(() => {
@@ -116,7 +116,7 @@ class Peers {
             link.connectTimeout = undefined;
             // Reassign the collection so connection status updates immediately
             // in the Wayship device list and title-bar indicator.
-            this.links = [...this.links];
+            this.links = this.links.map((item) => item.id === link.id ? { ...item, connected: true, connectTimeout: undefined } : item);
             this.closeListener(link.id);
             if (this.pending?.id === link.id) this.pending = null;
             if (link.backupAudio !== undefined) {

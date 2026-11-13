@@ -169,7 +169,7 @@ class WayshipState {
             }, 28_000);
             this.pollTimer = setInterval(() => {
                 void this.poll().catch(() => {});
-            }, 3500);
+            }, 1000);
         } catch (error) {
             console.warn('[wayship] Failed to start session:', error);
         }
