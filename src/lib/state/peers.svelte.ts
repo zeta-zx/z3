@@ -383,6 +383,12 @@ class Peers {
     disconnect(id: string) {
         const link = this.links.find((item) => item.id === id);
         if (!link) return;
+        // A Wayship remote session represents one shared playback timeline.
+        // If its transport disappears, stop locally rather than letting the
+        // two devices continue on unrelated tracks and timestamps.
+        if (link.wayshipPeerId && link.mode === 'remote') {
+            playerState.paused = true;
+        }
         this.closeListener(id);
         this.links = this.links.filter((item) => item.id !== id);
         this.pendingIce.delete(id);
