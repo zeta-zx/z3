@@ -56,6 +56,7 @@ class Peers {
     private listenerId: string | undefined;
     private incoming: IncomingBackup | null = null;
     private timer: ReturnType<typeof setInterval> | undefined;
+    private librarySyncTimer: ReturnType<typeof setInterval> | undefined;
     private pendingIce = new Map<string, RTCIceCandidateInit[]>();
 
     private log(event: string, details?: unknown) {
@@ -100,6 +101,11 @@ class Peers {
             };
             for (const link of hosts) this.send(link, data);
         }, 1200);
+        this.librarySyncTimer = setInterval(() => {
+            for (const link of this.links.filter((item) => item.host && item.connected && item.mode !== 'backup')) {
+                void this.syncLibrary(link.id).catch(() => {});
+            }
+        }, 30_000);
     }
 
     private send(link: Link, message: object) {
@@ -385,6 +391,7 @@ class Peers {
         if (!link.host) { this.remote = null; this.following = false; }
         if (this.incoming?.id === id) { this.incoming = null; this.progress = null; }
         if (!this.links.length) { clearInterval(this.timer); this.timer = undefined; }
+        if (!this.links.length) { clearInterval(this.librarySyncTimer); this.librarySyncTimer = undefined; }
         if (link.channel) { link.channel.onclose = null; link.channel.close(); }
         link.peer.close();
     }
