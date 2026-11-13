@@ -52,13 +52,16 @@ class Peers {
     following = $state(false);
     partyControls = $state(false);
     progress = $state<number | null>(null);
+    diagnostics = $state<string[]>([]);
     private listenerId: string | undefined;
     private incoming: IncomingBackup | null = null;
     private timer: ReturnType<typeof setInterval> | undefined;
     private pendingIce = new Map<string, RTCIceCandidateInit[]>();
 
     private log(event: string, details?: unknown) {
-        console.info(`[wayship-peer] ${event}`, details ?? '');
+        const line = `${new Date().toLocaleTimeString()} ${event}${details ? ` ${JSON.stringify(details)}` : ''}`;
+        this.diagnostics = [...this.diagnostics.slice(-39), line];
+        console.log(`[wayship-peer] ${line}`);
     }
 
     private async flushIce(id: string, peer: RTCPeerConnection) {

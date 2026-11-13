@@ -197,6 +197,10 @@
             {:else}
                     <p class="muted">No other Zeta devices are online on your Wayship account right now. Open Zeta and connect Wayship on another device, then it will appear here.</p>
             {/if}
+            <details class="diagnostics">
+                <summary>Wayship diagnostics</summary>
+                <pre>{[...wayship.diagnostics, ...peers.diagnostics].slice(-30).join('\n') || 'Waiting for a connection attempt…'}</pre>
+            </details>
         {:else}
             <details class="invitation">
                 <summary>Already have a Wayship token?</summary>
@@ -343,6 +347,20 @@
         border: 1px solid var(--border);
     }
     .wayship-peers { display: grid; gap: 8px; }
+    .diagnostics { margin-top: 2px; color: var(--text-2); }
+    .diagnostics summary { cursor: pointer; font-size: 12px; font-weight: 650; }
+    .diagnostics pre {
+        max-height: 220px;
+        overflow: auto;
+        margin: 8px 0 0;
+        padding: 10px;
+        border-radius: var(--r-md);
+        background: rgb(0 0 0 / 0.24);
+        color: var(--text-3);
+        font: 10px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+    }
     .wayship-peer {
         display: flex;
         align-items: center;

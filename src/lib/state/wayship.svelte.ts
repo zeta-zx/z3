@@ -65,9 +65,12 @@ class WayshipState {
     private autoConnectedPeers = new Set<string>();
 
     readonly connected = $derived(this.token.startsWith('wsa_'));
+    diagnostics = $state<string[]>([]);
 
     private log(event: string, details?: unknown) {
-        console.info(`[wayship] ${event}`, details ?? '');
+        const line = `${new Date().toLocaleTimeString()} ${event}${details ? ` ${JSON.stringify(details)}` : ''}`;
+        this.diagnostics = [...this.diagnostics.slice(-39), line];
+        console.log(`[wayship] ${line}`);
     }
 
     constructor() {
