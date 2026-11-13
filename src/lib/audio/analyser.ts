@@ -79,8 +79,28 @@ class Analyser {
     private subscribers = new Set<(f: AudioFeatures, dt: number) => void>();
     private raf = 0;
 
-    /** Route an audio element through the graph (idempotent per element). */
+    /** Route the audible player through the graph (idempotent per element). */
     attach(element: HTMLMediaElement) {
+        this.attachElement(element, false);
+    }
+
+    /**
+     * Route a muted/hidden element only into the analyser. Android's Media3
+     * player is native and therefore cannot feed Web Audio; this path lets a
+     * remote device decode the same song silently for FFT-driven visuals.
+     */
+    attachSilent(element: HTMLMediaElement) {
+        this.attachElement(element, true);
+    }
+
+    detach(element: HTMLMediaElement) {
+        if (this.current !== element) return;
+        try { this.sources.get(element)?.disconnect(); } catch { /* already disconnected */ }
+        this.current = null;
+        this.features.live = false;
+    }
+
+    private attachElement(element: HTMLMediaElement, silent: boolean) {
         if (this.current === element) return;
         try {
             this.ctx ??= new AudioContext({ latencyHint: "playback" });
@@ -113,7 +133,7 @@ class Analyser {
                 this.sources.set(element, source);
             }
             source.connect(this.analyser);
-            source.connect(this.filters[0] ?? this.gain!);
+            if (!silent) source.connect(this.filters[0] ?? this.gain!);
             element.volume = 1;
             this.current = element;
             this.applyVolume();

@@ -32,6 +32,7 @@
     import { client } from "$lib/ephaptic";
     import { peers } from "$lib/state/peers.svelte";
     import type { Song } from "$lib/schema";
+    import RemoteVisualizerAudio from "$lib/components/RemoteVisualizerAudio.svelte";
 
     // A connected guest can show the remote track even when this device is
     // not the playback target. This keeps the visualizer/lyrics surface alive
@@ -40,7 +41,11 @@
     const fav = $derived(track ? libraryState.isFavourite(track.id) : false);
     const mode = $derived(ui.nowPlayingMode);
     const pack = $derived(VISUALIZER_PACKS.find((p) => p.id === ui.visualizerPack) ?? VISUALIZER_PACKS[0]);
-    const artSrc = $derived(artworkState.url);
+    const artSrc = $derived(
+        peers.remote?.song?.id === track?.id && playerState.currentTrack?.id !== track?.id
+            ? null
+            : artworkState.url,
+    );
     let videos = $state<Song[]>([]);
     let selectedVideo = $state<Song | null>(null);
     let videoLoading = $state(false);
@@ -66,6 +71,12 @@
 
     $effect(() => {
         if (!track) ui.nowPlayingOpen = false;
+    });
+
+    // A guest can render a remote track without loading it into the native
+    // playback player. Keep its palette and background artwork in sync too.
+    $effect(() => {
+        if (!playerState.currentTrack) void artworkState.update(peers.remote?.song ?? null);
     });
 
     function setPack(id: string) {
@@ -221,6 +232,9 @@
     </header>
 
     {#if track}
+        {#if peers.remote?.song}
+            <RemoteVisualizerAudio song={track} enabled={mode === "visualizer" || mode === "stage"} />
+        {/if}
         {#if mode === "lyrics"}
             <div class="stage" class:no-lyrics={!lyricsState.has && !playerState.isLoading && !playerState.lyricsPending}>
                 <div class="left">
