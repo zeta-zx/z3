@@ -207,7 +207,7 @@
             {/if}
             <details class="diagnostics">
                 <summary>Wayship diagnostics</summary>
-                <pre tabindex="0">{[...wayship.diagnostics, ...peers.diagnostics].slice(-30).join('\n') || 'Waiting for a connection attempt…'}</pre>
+                <pre>{[...wayship.diagnostics, ...peers.diagnostics].slice(-30).join('\n') || 'Waiting for a connection attempt…'}</pre>
                 <button class="btn" type="button" onclick={() => run(copyDiagnostics)}>{diagnosticsCopied ? 'Copied' : 'Copy diagnostics'}</button>
             </details>
         {:else}

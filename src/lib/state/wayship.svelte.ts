@@ -227,6 +227,7 @@ class WayshipState {
     private async poll() {
         if (!this.token.startsWith('wsa_')) return;
         const out = await this.api<{ events: any[] }>(`/peers/poll?peer_id=${encodeURIComponent(this.peerId)}`);
+        if (out.events?.length) this.log('poll events', { count: out.events.length, kinds: out.events.map((event) => event.kind === 'signal' ? event.signal_kind : event.kind) });
         for (const ev of out.events ?? []) {
             this.handlePeerEvent(ev);
         }
@@ -282,21 +283,27 @@ class WayshipState {
                 this.iceServers,
                 (toPeer, kind, payload) => this.sendSignal(toPeer, kind, payload),
                 this.peerId,
-            );
+            ).catch((error) => this.log('signal handling failed', { error: String(error) }));
         }
     }
 
     async sendSignal(toPeer: string, kind: 'offer' | 'answer' | 'ice' | 'data', payload: unknown) {
         this.log('signal sent', { kind, from: this.peerId, to: toPeer, candidate: kind === 'ice' });
-        await this.api('/peers/signal', {
-            method: 'POST',
-            body: JSON.stringify({
-                from_peer: this.peerId,
-                to_peer: toPeer,
-                kind,
-                payload,
-            }),
-        });
+        try {
+            await this.api('/peers/signal', {
+                method: 'POST',
+                body: JSON.stringify({
+                    from_peer: this.peerId,
+                    to_peer: toPeer,
+                    kind,
+                    payload,
+                }),
+            });
+            this.log('signal accepted', { kind, to: toPeer });
+        } catch (error) {
+            this.log('signal failed', { kind, to: toPeer, error: String(error) });
+            throw error;
+        }
     }
 
     async connectPeer(remotePeerId: string, mode: PeerMode, includeAudio = true) {
