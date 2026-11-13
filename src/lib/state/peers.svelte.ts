@@ -507,7 +507,10 @@ class Peers {
             song, paused: !!message.paused, position: Math.max(0, message.position), duration: Math.max(0, message.duration),
             queue: Array.isArray(message.queue) ? message.queue.filter((title: unknown) => typeof title === 'string').slice(0, 25) : [],
         };
-        if (link.mode === 'party' && this.following) {
+        // Wayship remote links mirror the host just like listening-party links.
+        // The old check only handled `party`, so a successfully connected
+        // Wayship phone received playback messages but never applied them.
+        if ((link.mode === 'party' || link.mode === 'remote') && this.following) {
             if (!song || !/^(yt|js):/.test(song.id)) {
                 playerState.paused = true;
                 return;
