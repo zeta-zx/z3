@@ -248,6 +248,8 @@ class Peers {
         const id = `wayship:${remotePeerId}`;
         const peer = new RTCPeerConnection({ iceServers });
         this.log('peer created', { id, remotePeerId, iceServers: iceServers.map((server) => server.urls) });
+        let signalReady = false;
+        const queuedCandidates: RTCIceCandidateInit[] = [];
         const channel = peer.createDataChannel('zeta', { ordered: true });
         const link: Link = { id, mode, peer, host: true, connected: false, backupAudio, wayshipPeerId: remotePeerId, deviceName };
         this.links.push(link);
@@ -262,7 +264,11 @@ class Peers {
 
         peer.onicecandidate = ({ candidate }) => {
             if (!candidate) this.log('local ICE gathering complete', { id });
-            if (candidate) void sendSignal(remotePeerId, 'ice', candidate.toJSON()).catch(() => {});
+            if (candidate) {
+                const value = candidate.toJSON();
+                if (!signalReady) queuedCandidates.push(value);
+                else void sendSignal(remotePeerId, 'ice', value).catch(() => {});
+            }
         };
         peer.onicegatheringstatechange = () => this.log('ICE gathering state', { id, state: peer.iceGatheringState });
         peer.oniceconnectionstatechange = () => this.log('ICE connection state', { id, state: peer.iceConnectionState });
@@ -275,6 +281,10 @@ class Peers {
         const offer = await peer.createOffer();
         await peer.setLocalDescription(offer);
         await sendSignal(remotePeerId, 'offer', { sdp: peer.localDescription?.sdp, mode });
+        signalReady = true;
+        for (const candidate of queuedCandidates.splice(0)) {
+            void sendSignal(remotePeerId, 'ice', candidate).catch(() => {});
+        }
     }
 
     async handleWayshipSignal(
@@ -297,6 +307,8 @@ class Peers {
             const mode: PeerMode = ['backup', 'remote', 'party'].includes(payload.mode) ? payload.mode : 'remote';
             const peer = new RTCPeerConnection({ iceServers });
             this.log('peer created for offer', { id, remotePeerId, iceServers: iceServers.map((server) => server.urls) });
+            let signalReady = false;
+            const queuedCandidates: RTCIceCandidateInit[] = [];
             const link: Link = { id, mode, peer, host: false, connected: false, wayshipPeerId: remotePeerId, deviceName };
             this.links.push(link);
             this.startBroadcast();
@@ -310,7 +322,11 @@ class Peers {
             peer.ondatachannel = ({ channel }) => this.attach(link, channel);
             peer.onicecandidate = ({ candidate }) => {
                 if (!candidate) this.log('local ICE gathering complete', { id });
-                if (candidate) void sendSignal(remotePeerId, 'ice', candidate.toJSON()).catch(() => {});
+                if (candidate) {
+                    const value = candidate.toJSON();
+                    if (!signalReady) queuedCandidates.push(value);
+                    else void sendSignal(remotePeerId, 'ice', value).catch(() => {});
+                }
             };
             peer.onicegatheringstatechange = () => this.log('ICE gathering state', { id, state: peer.iceGatheringState });
             peer.oniceconnectionstatechange = () => this.log('ICE connection state', { id, state: peer.iceConnectionState });
@@ -325,6 +341,10 @@ class Peers {
             const answer = await peer.createAnswer();
             await peer.setLocalDescription(answer);
             await sendSignal(remotePeerId, 'answer', { sdp: peer.localDescription?.sdp, mode });
+            signalReady = true;
+            for (const candidate of queuedCandidates.splice(0)) {
+                void sendSignal(remotePeerId, 'ice', candidate).catch(() => {});
+            }
             return;
         }
         const link = this.links.find((l) => l.id === id);
