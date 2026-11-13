@@ -21,6 +21,7 @@ type Link = {
     backupAudio?: boolean;
     wayshipPeerId?: string;
     deviceName?: string;
+    connectTimeout?: ReturnType<typeof setTimeout>;
 };
 type IncomingBackup = { id: string; bytes: Uint8Array; offset: number; digest: string; silentSync?: boolean };
 
@@ -86,6 +87,8 @@ class Peers {
         channel.binaryType = 'arraybuffer';
         channel.onopen = () => {
             link.connected = true;
+            if (link.connectTimeout) clearTimeout(link.connectTimeout);
+            link.connectTimeout = undefined;
             this.closeListener(link.id);
             if (this.pending?.id === link.id) this.pending = null;
             if (link.backupAudio !== undefined) {
@@ -222,6 +225,7 @@ class Peers {
         iceServers: RTCIceServer[],
         sendSignal: (toPeer: string, kind: 'offer' | 'answer' | 'ice' | 'data', payload: unknown) => Promise<void>,
         backupAudio?: boolean,
+        localPeerId?: string,
     ) {
         const existing = this.links.find((l) => l.wayshipPeerId === remotePeerId);
         if (existing) {
@@ -239,6 +243,12 @@ class Peers {
         const link: Link = { id, mode, peer, host: true, connected: false, backupAudio, wayshipPeerId: remotePeerId, deviceName };
         this.links.push(link);
         this.attach(link, channel);
+        link.connectTimeout = setTimeout(() => {
+            if (!link.connected && this.links.some((item) => item.id === id)) {
+                this.disconnect(id);
+                toasts.error('Wayship could not establish a direct device connection. Try Connect again.');
+            }
+        }, 20_000);
         this.startBroadcast();
 
         peer.onicecandidate = ({ candidate }) => {
@@ -260,16 +270,26 @@ class Peers {
         payload: any,
         iceServers: RTCIceServer[],
         sendSignal: (toPeer: string, kind: 'offer' | 'answer' | 'ice' | 'data', payload: unknown) => Promise<void>,
+        localPeerId?: string,
     ) {
         const id = `wayship:${remotePeerId}`;
         if (kind === 'offer' && payload && typeof payload.sdp === 'string') {
             const existing = this.links.find((l) => l.id === id);
+            // If both devices were clicked at once, keep one deterministic
+            // offer instead of letting the two SDP negotiations collide.
+            if (existing?.host && localPeerId && localPeerId < remotePeerId) return;
             if (existing) this.disconnect(id);
             const mode: PeerMode = ['backup', 'remote', 'party'].includes(payload.mode) ? payload.mode : 'remote';
             const peer = new RTCPeerConnection({ iceServers });
             const link: Link = { id, mode, peer, host: false, connected: false, wayshipPeerId: remotePeerId, deviceName };
             this.links.push(link);
             this.startBroadcast();
+            link.connectTimeout = setTimeout(() => {
+                if (!link.connected && this.links.some((item) => item.id === id)) {
+                    this.disconnect(id);
+                    toasts.error('Wayship could not establish a direct device connection. Try Connect again.');
+                }
+            }, 20_000);
 
             peer.ondatachannel = ({ channel }) => this.attach(link, channel);
             peer.onicecandidate = ({ candidate }) => {
@@ -317,6 +337,7 @@ class Peers {
         this.closeListener(id);
         this.links = this.links.filter((item) => item.id !== id);
         this.pendingIce.delete(id);
+        if (link.connectTimeout) clearTimeout(link.connectTimeout);
         if (this.pending?.id === id) this.pending = null;
         if (!link.host) { this.remote = null; this.following = false; }
         if (this.incoming?.id === id) { this.incoming = null; this.progress = null; }

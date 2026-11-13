@@ -268,6 +268,7 @@ class WayshipState {
                 ev.payload,
                 this.iceServers,
                 (toPeer, kind, payload) => this.sendSignal(toPeer, kind, payload),
+                this.peerId,
             );
         }
     }
@@ -293,6 +294,7 @@ class WayshipState {
             this.iceServers,
             (toPeer, kind, payload) => this.sendSignal(toPeer, kind, payload),
             mode === 'backup' ? includeAudio : undefined,
+            this.peerId,
         );
     }
 
