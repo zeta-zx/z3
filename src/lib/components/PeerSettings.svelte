@@ -20,6 +20,7 @@
     let cameraRequest = 0;
     let query = $state('');
     let results = $state<Song[]>([]);
+    let diagnosticsCopied = $state(false);
     const guest = $derived(peers.links.find((link) => !link.host && link.connected && link.mode !== 'backup'));
 
     $effect(() => {
@@ -145,6 +146,13 @@
     async function search() {
         if (query.trim()) results = (await client.musicSearch(query.trim(), 'yt')).slice(0, 10);
     }
+
+    async function copyDiagnostics() {
+        const text = [...wayship.diagnostics, ...peers.diagnostics].slice(-30).join('\n') || 'Waiting for a connection attempt…';
+        await navigator.clipboard.writeText(text);
+        diagnosticsCopied = true;
+        setTimeout(() => { diagnosticsCopied = false; }, 1600);
+    }
 </script>
 
 <section class="card peer">
@@ -199,7 +207,8 @@
             {/if}
             <details class="diagnostics">
                 <summary>Wayship diagnostics</summary>
-                <pre>{[...wayship.diagnostics, ...peers.diagnostics].slice(-30).join('\n') || 'Waiting for a connection attempt…'}</pre>
+                <pre tabindex="0">{[...wayship.diagnostics, ...peers.diagnostics].slice(-30).join('\n') || 'Waiting for a connection attempt…'}</pre>
+                <button class="btn" type="button" onclick={() => run(copyDiagnostics)}>{diagnosticsCopied ? 'Copied' : 'Copy diagnostics'}</button>
             </details>
         {:else}
             <details class="invitation">
@@ -360,6 +369,8 @@
         font: 10px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
         white-space: pre-wrap;
         overflow-wrap: anywhere;
+        user-select: text;
+        -webkit-user-select: text;
     }
     .wayship-peer {
         display: flex;
