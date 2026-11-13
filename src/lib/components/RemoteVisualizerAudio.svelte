@@ -48,6 +48,7 @@
             audio.src = url;
             audio.preload = "auto";
             analyser.attachSilent(audio);
+            analyser.resume();
             loadedId = current.id;
             const position = peers.remote?.position ?? 0;
             audio.addEventListener("loadedmetadata", () => {
