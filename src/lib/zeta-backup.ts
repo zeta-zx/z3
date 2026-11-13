@@ -67,7 +67,10 @@ export function mergeBackupEvents(existing: BackupEvent[], incoming: BackupEvent
 
 export function backupImage(url?: string, includeEmbedded = true): string | undefined {
     if (typeof url !== 'string') return undefined;
-    if (/^https:\/\//i.test(url)) return url;
+    // Keep remote artwork URLs portable across desktop and Android. Older
+    // libraries can contain http thumbnails even though new providers prefer
+    // https; dropping those made playlist covers disappear after sync.
+    if (/^https?:\/\//i.test(url)) return url;
     if (includeEmbedded && /^data:image\/(?:jpeg|png|webp|gif|avif);base64,[a-z0-9+/]+=*$/i.test(url)) return url;
     return undefined;
 }
