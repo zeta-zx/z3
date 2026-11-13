@@ -3,6 +3,8 @@ import { DISCOVERY_PORT, INVITE_LIFETIME, makeNearbyInvite, openNearbyAnswer, re
 import { createPeer, decodeSignal, acceptPeer, sendPeerBytes, type PeerMode } from '$lib/peer-connection';
 import { addToQueue, nextTrack, previousTrack, playerState, playTrack, setVolume, togglePlay } from './player.svelte';
 import { libraryState } from './library.svelte';
+import { artworkState } from './artwork.svelte';
+import { statsState } from './stats.svelte';
 import { settingsState } from './settings.svelte';
 import { ui } from './ui.svelte';
 import { toasts } from './toast.svelte';
@@ -95,18 +97,21 @@ class Peers {
         this.timer = setInterval(() => {
             const hosts = this.links.filter((link) => link.host && link.connected && link.mode !== 'backup');
             if (!hosts.length) return;
-            const data = {
-                type: 'playback', song: wireSong(playerState.currentTrack), paused: playerState.paused,
-                position: playerState.currentTime, duration: playerState.duration, volume: playerState.volume,
-                queue: playerState.upNext.slice(0, 25).map(({ title }) => title),
-            };
-            for (const link of hosts) this.send(link, data);
+            for (const link of hosts) this.sendPlayback(link);
         }, 1200);
         this.librarySyncTimer = setInterval(() => {
             for (const link of this.links.filter((item) => item.host && item.connected && item.mode !== 'backup')) {
                 void this.syncLibrary(link.id).catch(() => {});
             }
         }, 30_000);
+    }
+
+    private sendPlayback(link: Link) {
+        this.send(link, {
+            type: 'playback', song: wireSong(playerState.currentTrack), paused: playerState.paused,
+            position: playerState.currentTime, duration: playerState.duration, volume: playerState.volume,
+            queue: playerState.upNext.slice(0, 25).map(({ title }) => title),
+        });
     }
 
     private send(link: Link, message: object) {
@@ -126,6 +131,8 @@ class Peers {
             this.links = this.links.map((item) => item.id === link.id ? { ...item, connected: true, connectTimeout: undefined } : item);
             this.closeListener(link.id);
             if (this.pending?.id === link.id) this.pending = null;
+            if (!link.host && link.mode === 'remote') this.following = true;
+            if (link.host && link.mode === 'remote') this.sendPlayback(link);
             if (link.backupAudio !== undefined) {
                 void this.sendBackup(link.id).catch((error) => toasts.error(error));
             } else {
@@ -495,7 +502,8 @@ class Peers {
             if (sync.offset === sync.bytes.length && await digest(Uint8Array.from(sync.bytes)) === sync.digest) {
                 await client.zetaImportBytes(sync.bytes);
                 await libraryState.refresh();
-                if (!link.host) void this.syncLibrary(link.id, true).catch(() => {});
+                await statsState.load();
+                if (!link.host) void this.syncLibrary(link.id, false).catch(() => {});
             }
             return;
         }
@@ -547,21 +555,29 @@ class Peers {
         }
         if (message.type !== 'playback' || !Number.isFinite(message.position) || !Number.isFinite(message.duration)) return;
         const song = wireSong(message.song);
+        const previousSongId = this.remote?.song?.id;
         this.remote = {
             song, paused: !!message.paused, position: Math.max(0, message.position), duration: Math.max(0, message.duration),
             volume: Number.isFinite(message.volume) ? Math.min(1, Math.max(0, message.volume)) : playerState.volume,
             queue: Array.isArray(message.queue) ? message.queue.filter((title: unknown) => typeof title === 'string').slice(0, 25) : [],
         };
+        if (song && song.id !== previousSongId) void artworkState.refresh(song);
         // Wayship remote links mirror the host just like listening-party links.
         // The old check only handled `party`, so a successfully connected
         // Wayship phone received playback messages but never applied them.
         if ((link.mode === 'party' || link.mode === 'remote') && this.following) {
-            if (!song || !/^(yt|js):/.test(song.id)) {
+            if (!song) {
+                playerState.paused = true;
+                playerState.currentTrack = null;
+                playerState.stream = null;
+                return;
+            }
+            if (!/^(yt|js):/.test(song.id)) {
                 playerState.paused = true;
                 return;
             }
             if (playerState.currentTrack?.id !== song.id) playTrack(song);
-            else if (!playerState.isLoading && playerState.stream) {
+            if (!playerState.isLoading && playerState.stream) {
                 if (Math.abs(playerState.currentTime - message.position) > 2) playerState.currentTime = message.position;
                 playerState.paused = !!message.paused;
             }
