@@ -273,7 +273,7 @@ class WayshipState {
         }
 
         if (ev.kind === 'signal' && ev.signal_kind) {
-            this.log('signal received', { kind: ev.signal_kind, from: ev.from_peer, to: ev.to_peer });
+            if (ev.signal_kind !== 'ice') this.log('signal received', { kind: ev.signal_kind, from: ev.from_peer, to: ev.to_peer });
             const peerInfo = this.onlinePeers.find((p) => p.peer_id === ev.from_peer);
             void peers.handleWayshipSignal(
                 ev.from_peer,
@@ -288,7 +288,7 @@ class WayshipState {
     }
 
     async sendSignal(toPeer: string, kind: 'offer' | 'answer' | 'ice' | 'data', payload: unknown) {
-        this.log('signal sent', { kind, from: this.peerId, to: toPeer, candidate: kind === 'ice' });
+        if (kind !== 'ice') this.log('signal sent', { kind, from: this.peerId, to: toPeer });
         try {
             await this.api('/peers/signal', {
                 method: 'POST',
@@ -299,7 +299,7 @@ class WayshipState {
                     payload,
                 }),
             });
-            this.log('signal accepted', { kind, to: toPeer });
+            if (kind !== 'ice') this.log('signal accepted', { kind, to: toPeer });
         } catch (error) {
             this.log('signal failed', { kind, to: toPeer, error: String(error) });
             throw error;

@@ -297,7 +297,7 @@ class Peers {
         localPeerId?: string,
     ) {
         const id = `wayship:${remotePeerId}`;
-        this.log('signal handling', { id, kind, hasPayload: !!payload });
+        if (kind !== 'ice') this.log('signal handling', { id, kind, hasPayload: !!payload });
         if (kind === 'offer' && payload && typeof payload.sdp === 'string') {
             const existing = this.links.find((l) => l.id === id);
             // If both devices were clicked at once, keep one deterministic
