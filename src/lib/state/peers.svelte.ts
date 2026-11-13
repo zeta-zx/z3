@@ -57,6 +57,10 @@ class Peers {
     private timer: ReturnType<typeof setInterval> | undefined;
     private pendingIce = new Map<string, RTCIceCandidateInit[]>();
 
+    private log(event: string, details?: unknown) {
+        console.info(`[wayship-peer] ${event}`, details ?? '');
+    }
+
     private async flushIce(id: string, peer: RTCPeerConnection) {
         const queued = this.pendingIce.get(id);
         if (!queued?.length || !peer.remoteDescription) return;
@@ -86,6 +90,7 @@ class Peers {
         link.channel = channel;
         channel.binaryType = 'arraybuffer';
         channel.onopen = () => {
+            this.log('data channel open', { id: link.id, host: link.host });
             link.connected = true;
             if (link.connectTimeout) clearTimeout(link.connectTimeout);
             link.connectTimeout = undefined;
@@ -101,7 +106,7 @@ class Peers {
                 if (!link.host && link.mode === 'remote') this.following = true;
             }
         };
-        channel.onclose = () => this.disconnect(link.id);
+        channel.onclose = () => { this.log('data channel closed', { id: link.id }); this.disconnect(link.id); };
         channel.onmessage = ({ data }) => { void this.receive(link, data).catch((error) => {
             this.incoming = null;
             this.progress = null;
@@ -239,6 +244,7 @@ class Peers {
         }
         const id = `wayship:${remotePeerId}`;
         const peer = new RTCPeerConnection({ iceServers });
+        this.log('peer created', { id, remotePeerId, iceServers: iceServers.map((server) => server.urls) });
         const channel = peer.createDataChannel('zeta', { ordered: true });
         const link: Link = { id, mode, peer, host: true, connected: false, backupAudio, wayshipPeerId: remotePeerId, deviceName };
         this.links.push(link);
@@ -252,9 +258,14 @@ class Peers {
         this.startBroadcast();
 
         peer.onicecandidate = ({ candidate }) => {
+            if (!candidate) this.log('local ICE gathering complete', { id });
             if (candidate) void sendSignal(remotePeerId, 'ice', candidate.toJSON()).catch(() => {});
         };
+        peer.onicegatheringstatechange = () => this.log('ICE gathering state', { id, state: peer.iceGatheringState });
+        peer.oniceconnectionstatechange = () => this.log('ICE connection state', { id, state: peer.iceConnectionState });
+        peer.onsignalingstatechange = () => this.log('signaling state', { id, state: peer.signalingState });
         peer.onconnectionstatechange = () => {
+            this.log('peer connection state', { id, state: peer.connectionState });
             if (peer.connectionState === 'failed') this.disconnect(id);
         };
 
@@ -273,6 +284,7 @@ class Peers {
         localPeerId?: string,
     ) {
         const id = `wayship:${remotePeerId}`;
+        this.log('signal handling', { id, kind, hasPayload: !!payload });
         if (kind === 'offer' && payload && typeof payload.sdp === 'string') {
             const existing = this.links.find((l) => l.id === id);
             // If both devices were clicked at once, keep one deterministic
@@ -281,6 +293,7 @@ class Peers {
             if (existing) this.disconnect(id);
             const mode: PeerMode = ['backup', 'remote', 'party'].includes(payload.mode) ? payload.mode : 'remote';
             const peer = new RTCPeerConnection({ iceServers });
+            this.log('peer created for offer', { id, remotePeerId, iceServers: iceServers.map((server) => server.urls) });
             const link: Link = { id, mode, peer, host: false, connected: false, wayshipPeerId: remotePeerId, deviceName };
             this.links.push(link);
             this.startBroadcast();
@@ -293,9 +306,14 @@ class Peers {
 
             peer.ondatachannel = ({ channel }) => this.attach(link, channel);
             peer.onicecandidate = ({ candidate }) => {
+                if (!candidate) this.log('local ICE gathering complete', { id });
                 if (candidate) void sendSignal(remotePeerId, 'ice', candidate.toJSON()).catch(() => {});
             };
+            peer.onicegatheringstatechange = () => this.log('ICE gathering state', { id, state: peer.iceGatheringState });
+            peer.oniceconnectionstatechange = () => this.log('ICE connection state', { id, state: peer.iceConnectionState });
+            peer.onsignalingstatechange = () => this.log('signaling state', { id, state: peer.signalingState });
             peer.onconnectionstatechange = () => {
+                this.log('peer connection state', { id, state: peer.connectionState });
                 if (peer.connectionState === 'failed') this.disconnect(id);
             };
 

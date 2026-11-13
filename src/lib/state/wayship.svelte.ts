@@ -66,6 +66,10 @@ class WayshipState {
 
     readonly connected = $derived(this.token.startsWith('wsa_'));
 
+    private log(event: string, details?: unknown) {
+        console.info(`[wayship] ${event}`, details ?? '');
+    }
+
     constructor() {
         if (browser && this.token.startsWith('wsa_')) {
             void this.startSession();
@@ -153,6 +157,8 @@ class WayshipState {
             if (me.device_name) this.deviceName = me.device_name;
             this.persist();
 
+            this.log('session ready', { peerId: this.peerId, deviceName: this.deviceName, connId: this.connId });
+
             await this.announce();
             this.openWebSocket();
             this.announceTimer = setInterval(() => {
@@ -173,8 +179,10 @@ class WayshipState {
             const ws = new WebSocket(WAYSHIP_WS);
             this.ws = ws;
             ws.onopen = () => {
+                this.log('websocket open');
                 ws.send(JSON.stringify({ type: 'auth', auth: { token: this.token } }));
             };
+            ws.onerror = (event) => this.log('websocket error', event);
             ws.onmessage = (ev) => {
                 try {
                     const msg = JSON.parse(String(ev.data));
@@ -206,6 +214,7 @@ class WayshipState {
             }),
         });
         this.onlinePeers = out.peers.filter((p) => p.peer_id !== this.peerId);
+        this.log('announce', { self: this.peerId, peers: this.onlinePeers.map((peer) => ({ id: peer.peer_id, name: peer.device_name })) });
         if (out.ice_servers?.length) this.iceServers = out.ice_servers;
 
         // Discovery is passive; the user chooses which device to connect.
@@ -260,6 +269,7 @@ class WayshipState {
         }
 
         if (ev.kind === 'signal' && ev.signal_kind) {
+            this.log('signal received', { kind: ev.signal_kind, from: ev.from_peer, to: ev.to_peer });
             const peerInfo = this.onlinePeers.find((p) => p.peer_id === ev.from_peer);
             void peers.handleWayshipSignal(
                 ev.from_peer,
@@ -274,6 +284,7 @@ class WayshipState {
     }
 
     async sendSignal(toPeer: string, kind: 'offer' | 'answer' | 'ice' | 'data', payload: unknown) {
+        this.log('signal sent', { kind, from: this.peerId, to: toPeer, candidate: kind === 'ice' });
         await this.api('/peers/signal', {
             method: 'POST',
             body: JSON.stringify({
@@ -286,6 +297,7 @@ class WayshipState {
     }
 
     async connectPeer(remotePeerId: string, mode: PeerMode, includeAudio = true) {
+        this.log('connect requested', { local: this.peerId, remote: remotePeerId, mode });
         const peerInfo = this.onlinePeers.find((p) => p.peer_id === remotePeerId);
         await peers.connectWayshipPeer(
             remotePeerId,
