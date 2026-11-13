@@ -15,10 +15,12 @@
         intensity?: number;
         /** Render continuously (false = draw only when art changes, e.g. reduced motion). */
         animate?: boolean;
+        /** Optional remote playback clock in seconds for a non-playing guest. */
+        clock?: number;
         onerror?: (err: Error) => void;
     }
 
-    let { pack, intensity = 1, animate = true, onerror }: Props = $props();
+    let { pack, intensity = 1, animate = true, clock, onerror }: Props = $props();
 
     let canvas = $state<HTMLCanvasElement>();
     let failed = $state(false);
@@ -39,6 +41,7 @@
         let artVersion = -1;
         let lastDraw = 0;
         let shownIntensity = intensity;
+        let timeOffset = 0;
         let loadingArt = false;
         let dirty = true;
         // Palette shown in the shader: glides to a new song's colours (~1.5s)
@@ -98,8 +101,10 @@
 
             lastDraw = now;
             dirty = false;
+            const elapsed = (now - start) / 1000;
+            if (clock !== undefined) timeOffset += (clock - (elapsed + timeOffset)) * Math.min(1, frameDt * 4);
             runner.render({
-                time: animate ? (now - start) / 1000 : 0,
+                time: animate ? elapsed + timeOffset : 0,
                 dt: Math.min(0.1, frameDt || dt),
                 audio: features,
                 colors: [shownColors[0], shownColors[1], shownColors[2]],

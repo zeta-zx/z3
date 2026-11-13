@@ -10,7 +10,7 @@ import { BACKUP_AUDIO_LIMIT_MESSAGE, MAX_BACKUP_BYTES } from '$lib/zeta-backup';
 import type { Song } from '$lib/schema';
 
 type Command = 'toggle' | 'next' | 'previous' | 'seek' | 'volume';
-type RemotePlayback = { song: Song | null; paused: boolean; position: number; duration: number; queue: string[] };
+type RemotePlayback = { song: Song | null; paused: boolean; position: number; duration: number; volume: number; queue: string[] };
 type Link = {
     id: string;
     mode: PeerMode;
@@ -31,7 +31,8 @@ function wireSong(input: unknown, remote = false): Song | null {
     if (remote && !/^yt:[\w-]{11}$|^js:[\w-]{1,64}$/.test(song.id)) return null;
     if (!/^(yt|js|local|fs):/.test(song.id) || song.id.length > 1024) return null;
     return {
-        id: song.id, title: song.title.slice(0, 300), thumbnails: [],
+        id: song.id, title: song.title.slice(0, 300),
+        thumbnails: song.thumbnails.filter((thumb) => typeof thumb?.url === 'string' && /^https?:\/\//i.test(thumb.url)).slice(0, 4),
         artists: song.artists.slice(0, 8).flatMap((artist) => typeof artist?.name === 'string'
             ? [{ name: artist.name.slice(0, 120), thumbnails: [] }] : []),
         duration: Number.isFinite(song.duration) ? Math.max(0, song.duration) : 0,
@@ -96,7 +97,7 @@ class Peers {
             if (!hosts.length) return;
             const data = {
                 type: 'playback', song: wireSong(playerState.currentTrack), paused: playerState.paused,
-                position: playerState.currentTime, duration: playerState.duration,
+                position: playerState.currentTime, duration: playerState.duration, volume: playerState.volume,
                 queue: playerState.upNext.slice(0, 25).map(({ title }) => title),
             };
             for (const link of hosts) this.send(link, data);
@@ -132,7 +133,6 @@ class Peers {
                 // has imported that transfer, avoiding two binary streams
                 // colliding on the same ordered data channel.
                 if (link.host) void this.syncLibrary(link.id, true).catch(() => {});
-                if (!link.host && link.mode === 'remote') this.following = true;
             }
         };
         channel.onclose = () => { this.log('data channel closed', { id: link.id }); this.disconnect(link.id); };
@@ -442,6 +442,24 @@ class Peers {
         if (link) this.send(link, { type: 'command', command, value });
     }
 
+    setFollowing(enabled: boolean) {
+        this.following = enabled;
+        const link = this.links.find((item) => !item.host && item.connected && item.mode === 'remote');
+        if (link) this.send(link, { type: enabled ? 'takeover' : 'release' });
+    }
+
+    takeoverGuest(id: string) {
+        const link = this.links.find((item) => item.id === id && item.host && item.connected && item.mode === 'remote');
+        if (!link) return;
+        playerState.paused = true;
+        this.send(link, { type: 'takeover' });
+    }
+
+    playHere(id: string) {
+        const link = this.links.find((item) => item.id === id && item.host && item.connected && item.mode === 'remote');
+        if (link) this.send(link, { type: 'release' });
+    }
+
     queue(song: Song) {
         const link = this.links.find((item) => !item.host && item.connected && item.mode === 'party');
         const clean = wireSong(song, true);
@@ -493,6 +511,10 @@ class Peers {
             return;
         }
         if (link.host) {
+            if (message.type === 'takeover') {
+                playerState.paused = true;
+                return;
+            }
             if (link.mode === 'party' && message.type === 'queue') {
                 const song = wireSong(message.song, true);
                 if (song && playerState.upNext.length < 100) addToQueue(song);
@@ -508,10 +530,20 @@ class Peers {
             }
             return;
         }
+        if (message.type === 'takeover') {
+            this.following = true;
+            return;
+        }
+        if (message.type === 'release') {
+            this.following = false;
+            playerState.paused = true;
+            return;
+        }
         if (message.type !== 'playback' || !Number.isFinite(message.position) || !Number.isFinite(message.duration)) return;
         const song = wireSong(message.song);
         this.remote = {
             song, paused: !!message.paused, position: Math.max(0, message.position), duration: Math.max(0, message.duration),
+            volume: Number.isFinite(message.volume) ? Math.min(1, Math.max(0, message.volume)) : playerState.volume,
             queue: Array.isArray(message.queue) ? message.queue.filter((title: unknown) => typeof title === 'string').slice(0, 25) : [],
         };
         // Wayship remote links mirror the host just like listening-party links.
@@ -527,6 +559,7 @@ class Peers {
                 if (Math.abs(playerState.currentTime - message.position) > 2) playerState.currentTime = message.position;
                 playerState.paused = !!message.paused;
             }
+            playerState.volume = this.remote.volume;
         }
     }
 }

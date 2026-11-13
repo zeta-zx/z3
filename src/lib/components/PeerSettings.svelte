@@ -298,6 +298,10 @@
                 <button class="btn" disabled={peers.progress !== null} onclick={() => run(() => peers.sendBackup(link.id))}>Send backup again</button>
             {:else}
                 <button class="btn" disabled={peers.progress !== null} onclick={() => run(() => peers.syncLibrary(link.id, true))}>Sync stats &amp; library</button>
+                {#if link.host && link.mode === 'remote'}
+                    <button class="btn" onclick={() => peers.takeoverGuest(link.id)}>Play on phone</button>
+                    <button class="btn" onclick={() => peers.playHere(link.id)}>Play on laptop</button>
+                {/if}
             {/if}
             <button class="btn" onclick={() => peers.disconnect(link.id)}>Disconnect</button>
         </div>
@@ -316,9 +320,9 @@
             <label>Seek <input type="range" min="0" max={peers.remote.duration} value={peers.remote.position}
                 onchange={(event) => peers.command('seek', Number(event.currentTarget.value))} /></label>
         {/if}
-        <label>Volume <input type="range" min="0" max="1" step="0.01" onchange={(event) => peers.command('volume', Number(event.currentTarget.value))} /></label>
-        {#if guest.mode === 'party'}
-            <label><input type="checkbox" bind:checked={peers.following} /> Play along on this device</label>
+        <label>Volume <input type="range" min="0" max="1" step="0.01" value={peers.remote?.volume ?? 1} onchange={(event) => peers.command('volume', Number(event.currentTarget.value))} /></label>
+        {#if guest.mode === 'party' || guest.mode === 'remote'}
+            <label><input type="checkbox" checked={peers.following} onchange={(event) => peers.setFollowing(event.currentTarget.checked)} /> Play on this device</label>
             <form class="buttons" onsubmit={(event) => { event.preventDefault(); void run(search); }}>
                 <input class="input" aria-label="Find a song for the party" bind:value={query} />
                 <button class="btn" type="submit">Search YouTube Music</button>

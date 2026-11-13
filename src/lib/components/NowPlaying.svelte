@@ -30,9 +30,13 @@
     import { toasts } from "$lib/state/toast.svelte";
     import { tilt } from "$lib/tilt";
     import { client } from "$lib/ephaptic";
+    import { peers } from "$lib/state/peers.svelte";
     import type { Song } from "$lib/schema";
 
-    const track = $derived(playerState.currentTrack);
+    // A connected guest can show the remote track even when this device is
+    // not the playback target. This keeps the visualizer/lyrics surface alive
+    // without starting a second local audio player.
+    const track = $derived(playerState.currentTrack ?? peers.remote?.song ?? null);
     const fav = $derived(track ? libraryState.isFavourite(track.id) : false);
     const mode = $derived(ui.nowPlayingMode);
     const pack = $derived(VISUALIZER_PACKS.find((p) => p.id === ui.visualizerPack) ?? VISUALIZER_PACKS[0]);
@@ -315,6 +319,7 @@
     {#if !ui.lite}
     <ShaderCanvas
         {pack}
+        clock={peers.remote?.position}
         onerror={(err) => {
             toasts.error(`Visualizer “${pack.name}” failed to start: ${err.message}`);
             if (pack.id !== "halo") setPack("halo");
