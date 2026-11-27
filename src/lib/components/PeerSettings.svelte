@@ -181,11 +181,15 @@
 
         {#if wayship.connected}
             <div class="wayship-status">
-                <span class="pulse-dot" aria-hidden="true"></span>
-                <span>
-                    Connected as <strong>{wayship.displayName || wayship.handle}</strong>
-                    {#if wayship.handle}<small class="muted">(@{wayship.handle})</small>{/if}
-                    · <small class="muted">{wayship.deviceName}</small>
+                {#if !wayship.reconnecting}<span class="pulse-dot" aria-hidden="true"></span>{/if}
+                <span aria-live="polite">
+                    {#if wayship.reconnecting}
+                        Reconnecting to Wayship…
+                    {:else}
+                        Connected as <strong>{wayship.displayName || wayship.handle}</strong>
+                        {#if wayship.handle}<small class="muted">(@{wayship.handle})</small>{/if}
+                        · <small class="muted">{wayship.deviceName}</small>
+                    {/if}
                 </span>
                 <button class="btn" onclick={() => run(() => wayship.announce())}>Refresh peers</button>
             </div>

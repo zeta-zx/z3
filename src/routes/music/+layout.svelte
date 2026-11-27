@@ -2,6 +2,7 @@
     import PlayerEngine from "$lib/components/PlayerEngine.svelte";
     import AmbientBackground from "$lib/components/AmbientBackground.svelte";
     import Dock from "$lib/components/Dock.svelte";
+    import Icon from "$lib/components/Icon.svelte";
     import PlayerCapsule from "$lib/components/PlayerCapsule.svelte";
     import NowPlaying from "$lib/components/NowPlaying.svelte";
     import TitleBar from "$lib/components/TitleBar.svelte";
@@ -10,14 +11,17 @@
     import Dialog from "$lib/components/Dialog.svelte";
     import Shortcuts from "$lib/components/Shortcuts.svelte";
     import { ui } from "$lib/state/ui.svelte";
+    import { discordVoice } from "$lib/state/discord-voice.svelte";
     import { page } from "$app/state";
     import { afterNavigate } from "$app/navigation";
     import { fly } from "svelte/transition";
+    import { onDestroy } from "svelte";
     import { isAndroid } from '$lib/platform';
 
     let { children } = $props();
 
     let main = $state<HTMLElement>();
+    onDestroy(() => discordVoice.stop());
 
     // Each page starts at the top.
     afterNavigate(() => {
@@ -55,12 +59,25 @@
     <NowPlaying />
 {/if}
 
+{#if discordVoice.room}
+    <button class="discord-audio btn" onclick={() => discordVoice.stop()} title={`Sharing audio to ${discordVoice.room}`}>
+        <Icon name="radio" />
+        Stop Discord audio
+    </button>
+{/if}
+
 <PlayerEngine />
 <ContextMenu />
 <Dialog />
 <Shortcuts />
 
 <style>
+    .discord-audio {
+        position: fixed;
+        right: 20px;
+        bottom: 20px;
+        z-index: 1300;
+    }
     .world {
         position: relative;
         z-index: 1;

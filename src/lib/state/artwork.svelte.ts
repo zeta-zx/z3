@@ -170,6 +170,11 @@ class ArtworkStore {
 
     private key: string | null = null;
     private blobs = new Map<string, Artwork>();
+    private loading = new Map<string, number>();
+
+    artworkFor(trackId: string) {
+        return { url: this.blobs.get(trackId)?.url, pending: this.loading.has(trackId) };
+    }
 
     async update(track: Song | null) {
         const key = track?.id ?? null;
@@ -187,6 +192,7 @@ class ArtworkStore {
             return;
         }
 
+        this.loading.set(track.id, (this.loading.get(track.id) ?? 0) + 1);
         try {
             const source = bestSource(track);
             if (!source) throw new Error("no artwork");
@@ -228,6 +234,10 @@ class ArtworkStore {
             if (this.key === track.id) this.apply(art);
         } catch {
             if (this.key === track.id) this.apply(null);
+        } finally {
+            const remaining = (this.loading.get(track.id) ?? 1) - 1;
+            if (remaining) this.loading.set(track.id, remaining);
+            else this.loading.delete(track.id);
         }
     }
 

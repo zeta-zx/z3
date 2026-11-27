@@ -318,7 +318,7 @@ class Peers {
         this.links.push(link);
         this.attach(link, channel);
         link.connectTimeout = setTimeout(() => {
-            if (!link.connected && this.links.some((item) => item.id === id)) {
+            if (!link.connected && this.links.some((item) => item.peer === peer)) {
                 this.disconnect(id);
                 toasts.error('Wayship could not establish a direct device connection. Try Connect again.');
             }
@@ -333,7 +333,7 @@ class Peers {
         peer.onsignalingstatechange = () => this.log('signaling state', { id, state: peer.signalingState });
         peer.onconnectionstatechange = () => {
             this.log('peer connection state', { id, state: peer.connectionState });
-            if (peer.connectionState === 'failed') this.disconnect(id);
+            if (peer.connectionState === 'failed' && this.links.some((item) => item.peer === peer)) this.disconnect(id);
         };
 
         const offer = await peer.createOffer();
@@ -359,7 +359,6 @@ class Peers {
             // offer instead of letting the two SDP negotiations collide.
             if (existing?.host && localPeerId && localPeerId < remotePeerId) return;
             if (existing) this.disconnect(id);
-            this.pendingIce.delete(id);
             const mode: PeerMode = ['backup', 'remote', 'party'].includes(payload.mode) ? payload.mode : 'remote';
             const peer = new RTCPeerConnection({ iceServers });
             this.log('peer created for offer', { id, remotePeerId, iceServers: iceServers.map((server) => server.urls) });
@@ -367,7 +366,7 @@ class Peers {
             this.links.push(link);
             this.startBroadcast();
             link.connectTimeout = setTimeout(() => {
-                if (!link.connected && this.links.some((item) => item.id === id)) {
+                if (!link.connected && this.links.some((item) => item.peer === peer)) {
                     this.disconnect(id);
                     toasts.error('Wayship could not establish a direct device connection. Try Connect again.');
                 }
@@ -382,7 +381,7 @@ class Peers {
             peer.onsignalingstatechange = () => this.log('signaling state', { id, state: peer.signalingState });
             peer.onconnectionstatechange = () => {
                 this.log('peer connection state', { id, state: peer.connectionState });
-                if (peer.connectionState === 'failed') this.disconnect(id);
+                if (peer.connectionState === 'failed' && this.links.some((item) => item.peer === peer)) this.disconnect(id);
             };
 
             await peer.setRemoteDescription({ type: 'offer', sdp: payload.sdp });
@@ -421,10 +420,9 @@ class Peers {
     disconnect(id: string) {
         const link = this.links.find((item) => item.id === id);
         if (!link) return;
-        // A Wayship remote session represents one shared playback timeline.
-        // If its transport disappears, stop locally rather than letting the
-        // two devices continue on unrelated tracks and timestamps.
-        if (link.wayshipPeerId && link.mode === 'remote') {
+        // A guest playing the host's timeline must pause when that timeline
+        // stops arriving. The device that owns playback can keep playing.
+        if (link.wayshipPeerId && link.mode === 'remote' && !link.host && this.following) {
             playerState.paused = true;
         }
         this.closeListener(id);

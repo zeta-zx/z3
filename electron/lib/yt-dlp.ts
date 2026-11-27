@@ -7,6 +7,7 @@ import { MAX_BITRATE_KBPS, type AudioQuality } from '../../src/lib/audio-quality
 
 const execFileAsync = promisify(execFile);
 const MAX_COOKIE_FILE_BYTES = 1024 * 1024;
+const LEGACY_PLAYER_ERROR = /addOnDisposeCallback is not a function/i;
 
 function downloaderEnvironment(): NodeJS.ProcessEnv {
     const env = { ...process.env };
@@ -82,15 +83,25 @@ export async function downloadWithYtDlp(
             args.push('--cookies', privateCopy);
         }
 
-        args.push('--', `https://www.youtube.com/watch?v=${videoId}`);
-        const { stdout } = await execFileAsync(process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp', args, {
+        const executable = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
+        const url = `https://www.youtube.com/watch?v=${videoId}`;
+        const options = {
             cwd: temp,
             env: downloaderEnvironment(),
-            encoding: 'buffer',
+            encoding: 'buffer' as const,
             maxBuffer: 128 * 1024 * 1024,
             timeout: 90_000,
             windowsHide: true,
-        }).catch((error: NodeJS.ErrnoException & { stderr?: Buffer; killed?: boolean }) => {
+        };
+        const downloadAudio = (extraArgs: string[] = []) =>
+            execFileAsync(executable, [...args, ...extraArgs, '--', url], options);
+        const download = downloadAudio().catch((error: NodeJS.ErrnoException & { stderr?: Buffer; killed?: boolean }) => {
+            if (error.killed || !LEGACY_PLAYER_ERROR.test(error.stderr?.toString() ?? '')) throw error;
+            // yt-dlp 2026.11.23 switched player JS variants to fix this solver crash.
+            // Apply the same switch on older versions, retaining the selected cookies.
+            return downloadAudio(['--extractor-args', 'youtube:player_js_variant=tv']);
+        });
+        const { stdout } = await download.catch((error: NodeJS.ErrnoException & { stderr?: Buffer; killed?: boolean }) => {
             if (error.code === 'ENOENT') {
                 throw new Error('Zeta could not find yt-dlp. Install it in a standard location or add it to your PATH, then reopen Zeta.');
             }
@@ -106,6 +117,15 @@ export async function downloadWithYtDlp(
                     : 'YouTube requested sign-in. Choose a signed-in browser profile or a YouTube cookies file in Settings.');
             }
             // CLI errors may include signed media URLs or local file paths.
+            if (LEGACY_PLAYER_ERROR.test(stderr)) {
+                throw new Error('This version of yt-dlp cannot handle the current YouTube player. Update yt-dlp to 2026.11.23 or newer and retry.');
+            }
+            if (/no supported JavaScript runtime|challenge solver script|signature solving failed|n challenge solving failed/i.test(stderr)) {
+                throw new Error('yt-dlp could not resolve YouTube audio. Use a current yt-dlp build with its YouTube challenge scripts and Node.js 22+ or Deno.');
+            }
+            if (/HTTP (?:Error )?403|Requested format is not available|No (?:audio|video) formats found/i.test(stderr)) {
+                throw new Error('YouTube did not provide playable audio to yt-dlp. Update yt-dlp and retry.');
+            }
             throw new Error('yt-dlp could not download YouTube audio. Check that yt-dlp and Node.js 22+ or Deno are up to date.');
         });
         if (!stdout.length) throw new Error('yt-dlp returned empty YouTube audio.');

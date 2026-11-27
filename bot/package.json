@@ -1,0 +1,24 @@
+{
+  "name": "zeta-discord",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.17.0"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env index.mjs",
+    "build:activity": "esbuild activity/client.mjs --bundle --minify --format=esm --outfile=.activity-dist/activity.js",
+    "test": "npm run build:activity && node --test *.test.mjs"
+  },
+  "dependencies": {
+    "@discord/embedded-app-sdk": "^2.5.0",
+    "@discordjs/voice": "^0.19.2",
+    "discord.js": "^14.28.1",
+    "prism-media": "^1.3.5",
+    "ws": "^8.23.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}

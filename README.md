@@ -122,6 +122,14 @@ in the local app build; account sessions and ListenBrainz tokens are kept in pri
 application settings and are not exposed by the settings-status API. Do not commit
 real credentials or distribute your own local build credentials unintentionally.
 
+## Zeta for Discord
+
+The optional Discord bot installs to your Discord account and works in eligible
+servers and DMs. Link Last.fm or ListenBrainz with a public username to see
+what's playing, recent listens, and top tracks and artists. Connect the bot and
+an open Zeta player to the same Wayship account for playback controls and lyrics.
+See the [bot setup guide](bot/README.md) for installation and commands.
+
 ## Publishing a release
 
 The tag workflow builds Windows, macOS (Apple Silicon and Intel), Linux, and a

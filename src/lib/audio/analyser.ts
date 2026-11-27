@@ -47,6 +47,7 @@ class Analyser {
     private ctx: AudioContext | null = null;
     private analyser: AnalyserNode | null = null;
     private gain: GainNode | null = null;
+    private mix: GainNode | null = null;
     private filters: BiquadFilterNode[] = [];
     private compressor: DynamicsCompressorNode | null = null;
     private output: AudioNode | null = null;
@@ -112,11 +113,13 @@ class Analyser {
                 this.analyser.maxDecibels = -30;
                 this.gain = this.ctx.createGain();
                 this.gain.connect(this.ctx.destination);
+                this.mix = this.ctx.createGain();
+                this.mix.connect(this.gain);
                 this.compressor = this.ctx.createDynamicsCompressor();
                 this.compressor.threshold.value = -20;
                 this.compressor.ratio.value = 4;
                 this.compressor.release.value = 0.7;
-                this.compressor.connect(this.gain);
+                this.compressor.connect(this.mix);
                 this.filters = [60, 230, 910, 3600, 14000].map((frequency, index) => {
                     const filter = this.ctx!.createBiquadFilter();
                     filter.type = index === 0 ? 'lowshelf' : index === 4 ? 'highshelf' : 'peaking';
@@ -149,10 +152,10 @@ class Analyser {
     setEffects(levels: number[], leveling: boolean) {
         this.levels = levels;
         this.leveling = leveling;
-        if (!this.ctx || !this.gain) return;
+        if (!this.ctx || !this.mix) return;
         this.filters.forEach((filter, index) => filter.gain.setTargetAtTime(levels[index] ?? 0, this.ctx!.currentTime, 0.02));
         const last = this.filters.at(-1);
-        const output = leveling ? this.compressor : this.gain;
+        const output = leveling ? this.compressor : this.mix;
         if (last && output && output !== this.output) {
             last.disconnect();
             last.connect(output);
@@ -163,6 +166,25 @@ class Analyser {
     /** Browsers start contexts suspended until playback; call on play. */
     resume() {
         if (this.ctx?.state === "suspended") this.ctx.resume().catch(() => {});
+    }
+
+    get canCapture() {
+        return !!this.ctx && !!this.mix && !!this.current;
+    }
+
+    captureOutput() {
+        const { ctx, mix } = this;
+        if (!ctx || !mix || !this.current) throw new Error('Open the desktop Zeta music player first.');
+        const capture = ctx.createMediaStreamDestination();
+        // Capture only Zeta's player, before the local volume control.
+        mix.connect(capture);
+        return {
+            stream: capture.stream,
+            stop: () => {
+                mix.disconnect(capture);
+                for (const track of capture.stream.getTracks()) track.stop();
+            },
+        };
     }
 
     /** 0..1 linear slider value; mapped to a perceptual gain curve. */
