@@ -1,6 +1,6 @@
 import type { Song } from './schema';
 
-function normalized(value: string | undefined): string {
+export function normalized(value: string | undefined): string {
     return (value ?? '')
         .normalize('NFKD')
         .replace(/\p{Diacritic}/gu, '')

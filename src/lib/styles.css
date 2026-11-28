@@ -878,6 +878,224 @@ button:disabled {
     background-clip: border-box !important;
 }
 
+/* ==========================================================================
+   Polish layer: small visual touches, plus pausing animations while the
+   window is hidden. Lite mode turns the decorative parts off at the end.
+   ========================================================================== */
+
+/* Perf: stop every decorative loop while the window is hidden/minimised. */
+html[data-idle="true"] *,
+html[data-idle="true"] *::before,
+html[data-idle="true"] *::after {
+    animation-play-state: paused !important;
+}
+
+/* Perf: the backdrop is fixed to the window, so its layout and paint can be
+   isolated (no size containment needed). Its layers never stop moving, so
+   promote them once. */
+.ambient {
+    contain: layout paint;
+}
+.ambient .art-wrap,
+.ambient .drift,
+.ambient .blob {
+    will-change: transform, opacity;
+    backface-visibility: hidden;
+}
+
+/* Perf: a card in a grid can't change the layout around it. */
+.grid-cards > * {
+    contain: layout style;
+}
+
+/* The scrolling pane doesn't hand leftover scroll to the window. */
+.world main {
+    overscroll-behavior: contain;
+}
+
+/* Visual: crisper type. */
+body {
+    text-rendering: optimizeLegibility;
+}
+h1, h2, h3, .page-title, .section-title, .empty h3 {
+    text-wrap: balance;
+}
+p {
+    text-wrap: pretty;
+}
+
+/* Visual: islands get a soft top-lit edge. Done with border colours only, so
+   it needs no pseudo-element and doesn't change how any island is positioned. */
+.card,
+.island {
+    border-color: rgb(255 255 255 / 0.14) rgb(255 255 255 / 0.08) rgb(255 255 255 / 0.05);
+}
+
+/* Visual: buttons feel physical, primary gets a light sweep. */
+.btn,
+.chip,
+.segmented button {
+    transition-timing-function: var(--ease-out);
+}
+.btn-primary {
+    position: relative;
+    overflow: hidden;
+}
+/* Repeated for hover because the base hover rule resets the whole background. */
+.btn-primary,
+.btn-primary:hover:not(:disabled) {
+    background-image: linear-gradient(180deg, rgb(255 255 255 / 0.22), rgb(255 255 255 / 0) 60%);
+}
+.btn-primary::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(105deg, transparent 35%, rgb(255 255 255 / 0.38) 50%, transparent 65%);
+    transform: translateX(-120%);
+    transition: transform 0.7s var(--ease-out);
+    pointer-events: none;
+}
+.btn-primary:hover:not(:disabled)::after {
+    transform: translateX(120%);
+}
+.btn:hover:not(:disabled) {
+    transform: translateY(-1px);
+}
+/* Repeated after the hover lift so pressing a button still shrinks it. */
+.btn:active:not(:disabled) {
+    transform: scale(0.96);
+}
+.play-btn {
+    background-image: linear-gradient(180deg, rgb(255 255 255 / 0.25), rgb(255 255 255 / 0) 55%);
+}
+
+/* Visual: inputs glow in the cover's colour on focus. */
+.input:focus {
+    box-shadow: 0 0 0 4px var(--accent-soft), 0 8px 24px -12px var(--accent-glow);
+}
+
+/* Visual: scrollbar thumb picks up the accent when hovered. */
+*::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in srgb, var(--accent) 55%, white 10%);
+}
+
+/* Visual: chips/segmented get a subtle depth when active. */
+.chip[aria-pressed="true"],
+.segmented button[aria-pressed="true"] {
+    box-shadow: 0 6px 18px -8px rgb(255 255 255 / 0.4);
+}
+
+/* Visual: skeletons get a solid base under the shimmer. */
+.skeleton {
+    background-color: var(--surface-1);
+}
+
+/* Visual: focus ring sits a little further out. */
+:focus-visible {
+    outline-offset: 3px;
+}
+
+/* Round two: small touches that make everything feel more alive. */
+
+/* Shelves fade out at an edge only while there's more to scroll to on that
+   side. Where scroll-driven animations aren't supported, only the right edge
+   fades. */
+@property --shelf-fade-start {
+    syntax: "<length>";
+    inherits: false;
+    initial-value: 0px;
+}
+@property --shelf-fade-end {
+    syntax: "<length>";
+    inherits: false;
+    initial-value: 40px;
+}
+.shelf {
+    -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 var(--shelf-fade-start), #000 calc(100% - var(--shelf-fade-end)), transparent 100%);
+    mask-image: linear-gradient(90deg, transparent 0, #000 var(--shelf-fade-start), #000 calc(100% - var(--shelf-fade-end)), transparent 100%);
+}
+@supports (animation-timeline: scroll()) {
+    .shelf {
+        animation: shelf-fade-start linear both, shelf-fade-end linear both;
+        animation-timeline: scroll(self inline), scroll(self inline);
+        animation-range-start: 0px, calc(100% - 40px);
+        animation-range-end: 40px, 100%;
+    }
+}
+@keyframes shelf-fade-start {
+    to {
+        --shelf-fade-start: 28px;
+    }
+}
+@keyframes shelf-fade-end {
+    to {
+        --shelf-fade-end: 0px;
+    }
+}
+
+/* Kicker gets a soft glow in the cover's colour. */
+.kicker {
+    text-shadow: 0 0 18px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* Switch: glow when on. */
+.switch[aria-checked="true"] {
+    box-shadow: 0 0 16px -2px var(--accent-glow);
+}
+
+/* Caret in the cover's colour. */
+input,
+textarea {
+    caret-color: var(--accent);
+}
+
+/* Badges and chips: a hairline highlight for depth. */
+.badge,
+.chip {
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.06);
+}
+
+/* Empty-state icons float gently (spinners keep spinning). */
+.empty svg:not(.spin) {
+    animation: float-soft 5s ease-in-out infinite;
+}
+@keyframes float-soft {
+    50% {
+        transform: translateY(-5px);
+    }
+}
+
+/* lite: turn the decorative parts of the polish layer off. The perf rules
+   above stay on, since they help weak hardware most. */
+:root.lite .card,
+:root.lite .island {
+    border-color: rgb(255 255 255 / 0.09);
+}
+:root.lite .shelf {
+    animation: none !important;
+    -webkit-mask-image: none !important;
+    mask-image: none !important;
+}
+:root.lite .btn-primary::after {
+    display: none !important;
+}
+:root.lite .btn:hover:not(:disabled):not(:active) {
+    transform: none;
+}
+:root.lite .chip[aria-pressed="true"],
+:root.lite .segmented button[aria-pressed="true"] {
+    box-shadow: none;
+}
+/* lite forces every animation to 0.18s, which would turn the float into a fast bob */
+:root.lite .empty svg:not(.spin) {
+    animation: none !important;
+}
+:root.lite .ambient .art-wrap,
+:root.lite .ambient .drift,
+:root.lite .ambient .blob {
+    will-change: auto;
+}
+
 /* Kept for pages that still use it. */
 .hidden {
     display: none !important;

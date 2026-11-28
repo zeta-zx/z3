@@ -13,11 +13,24 @@
     import { page } from "$app/state";
     import { afterNavigate } from "$app/navigation";
     import { fly } from "svelte/transition";
+    import { onMount } from "svelte";
     import { isAndroid } from '$lib/platform';
 
     let { children } = $props();
 
     let main = $state<HTMLElement>();
+
+    // Pause decorative animations while the window isn't visible.
+    onMount(() => {
+        const root = document.documentElement;
+        const sync = () => root.setAttribute("data-idle", String(document.hidden));
+        sync();
+        document.addEventListener("visibilitychange", sync);
+        return () => {
+            document.removeEventListener("visibilitychange", sync);
+            root.removeAttribute("data-idle");
+        };
+    });
 
     // Each page starts at the top.
     afterNavigate(() => {
@@ -36,7 +49,7 @@
 <div class="world" class:behind={ui.nowPlayingOpen} class:panel-open={!!ui.sidePanel}>
     <main bind:this={main}>
         {#key page.url.pathname}
-            <div class="route" in:fly={{ y: 18, duration: 480, delay: 80, opacity: 0 }}>
+            <div class="route" in:fly={{ y: 14, duration: 320, delay: 30, opacity: 0 }}>
                 {@render children()}
             </div>
         {/key}

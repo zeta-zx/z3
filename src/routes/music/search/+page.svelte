@@ -79,7 +79,16 @@
 </script>
 
 <div class="page">
-    {#if searchState.error}
+    {#if searchState.offline}
+        <div class="error island offline-note">
+            <Icon name={searchState.error ? "cloud-off" : "wifi-off"} />
+            <span>
+                {searchState.error ? `Search failed (${searchState.error}).` : "You're offline."}
+                Showing songs saved on this device.
+            </span>
+            <button class="btn btn-ghost" onclick={() => searchState.run()}>Retry</button>
+        </div>
+    {:else if searchState.error}
         <div class="error island">
             <Icon name="circle-alert" />
             <span>{searchState.error}</span>
@@ -94,7 +103,11 @@
         </div>
     {:else if results.length || artists.length || albums.length || playlists.length || searchState.videos.length || searchState.videosLoading}
         <header class="results-head">
-            <span class="kicker"><Icon name="search" /> Results</span>
+            {#if searchState.offline}
+                <span class="kicker"><Icon name="hard-drive" /> Saved on this device</span>
+            {:else}
+                <span class="kicker"><Icon name="search" /> Results</span>
+            {/if}
             <h1 class="page-title">“{searchState.lastQuery}”</h1>
         </header>
 
@@ -149,7 +162,9 @@
                     >
                         <Icon name={topPlaying && !playerState.paused ? "pause" : "play"} />
                     </button>
-                    <button class="btn" onclick={(e) => { e.stopPropagation(); radioFrom(top); }}><Icon name="radio" /> Radio</button>
+                    {#if !searchState.offline}
+                        <button class="btn" onclick={(e) => { e.stopPropagation(); radioFrom(top); }}><Icon name="radio" /> Radio</button>
+                    {/if}
                 </div>
             </div>
 
@@ -171,7 +186,7 @@
         </div>
         {/if}
 
-        {#if searchState.provider === "yt"}
+        {#if searchState.provider === "yt" && !searchState.offline}
             <section class="section">
                 <div class="section-head">
                     <div>
@@ -256,6 +271,12 @@
                 </div>
             </section>
         {/if}
+    {:else if searchState.offline}
+        <div class="empty">
+            <Icon name="hard-drive" />
+            <h3>No saved songs match “{searchState.lastQuery}”</h3>
+            <p>Download songs while you're online to search them offline.</p>
+        </div>
     {:else}
         <header class="results-head">
             <span class="kicker"><Icon name="compass" /> Discover</span>
@@ -323,6 +344,10 @@
     .error span {
         flex: 1;
         color: var(--text);
+    }
+    /* Not a failure: saved songs are still useful, so no danger colour. */
+    .error.offline-note {
+        color: var(--text-2);
     }
     .results-grid {
         display: grid;

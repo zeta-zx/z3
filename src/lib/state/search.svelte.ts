@@ -1,6 +1,8 @@
 import { browser } from "$app/environment";
 import { client } from "$lib/ephaptic";
 import type { Artist, CollectionSummary, MusicProvider, Song } from "$lib/schema";
+import { libraryState } from "$lib/state/library.svelte";
+import { searchSavedSongs } from "$lib/saved-song-search";
 
 const RECENT_KEY = "zeta:recent-searches";
 
@@ -18,6 +20,8 @@ class SearchStore {
     videosError = $state("");
     loading = $state(false);
     error = $state("");
+    /** The results are songs saved on this device, because search couldn't reach the network. */
+    offline = $state(false);
     recent = $state<string[]>(browser ? JSON.parse(localStorage.getItem(RECENT_KEY) || "[]") : []);
 
     private seq = 0;
@@ -35,6 +39,7 @@ class SearchStore {
         this.videosError = "";
         this.loading = false;
         this.error = "";
+        this.offline = false;
     }
 
     async run(query = this.query) {
@@ -42,12 +47,18 @@ class SearchStore {
         if (!q) return;
         this.query = q;
         this.error = "";
+        this.offline = false;
         this.videos = [];
         this.videosError = "";
         this.videosLoading = false;
         this.loading = true;
         const seq = ++this.seq;
         const provider = $state.snapshot(this.provider);
+        if (browser && !navigator.onLine) {
+            this.loading = false;
+            this.showSaved(q);
+            return;
+        }
         try {
             const [results, extras] = await Promise.all([
                 client.musicSearch(q, provider),
@@ -74,6 +85,7 @@ class SearchStore {
                 albums = [...albums, ...albumMatches];
                 if (seq !== this.seq) return;
             }
+            this.offline = false;
             this.results = results;
             this.artists = extras.artists;
             this.albums = [...new Map(albums.map((album) => [album.id, album])).values()].slice(0, 12);
@@ -82,10 +94,27 @@ class SearchStore {
             this.remember(q);
             if (provider === "yt") void this.loadVideos(q, seq);
         } catch (err: any) {
-            if (seq === this.seq) this.error = err?.message ?? String(err);
+            if (seq !== this.seq) return;
+            this.error = err?.message ?? String(err);
+            // Lost the connection mid-search, or the network is unreachable:
+            // fall back to whatever is saved on this device.
+            const saved = searchSavedSongs(q, libraryState.tracks.values());
+            if (!navigator.onLine || saved.length) this.showSaved(q, saved);
         } finally {
             if (seq === this.seq) this.loading = false;
         }
+    }
+
+    /** Show songs saved on this device that match the query. */
+    private showSaved(q: string, saved = searchSavedSongs(q, libraryState.tracks.values())) {
+        this.offline = true;
+        this.results = saved;
+        this.artists = [];
+        this.albums = [];
+        this.playlists = [];
+        this.videos = [];
+        this.lastQuery = q;
+        this.remember(q);
     }
 
     private async loadVideos(query: string, seq: number) {
