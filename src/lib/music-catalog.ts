@@ -427,7 +427,18 @@ export async function searchMusicSongs(
         yt.search(strippedQuery ?? query, { type: 'video' }),
     ]);
 
-    const toSongs = (res: PromiseSettledResult<any>, section: string, legacy: string): Song[] =>
+    // If every request we actually sent failed, YouTube is unreachable: say so
+    // instead of returning [], so callers can fall back to saved songs. The
+    // skipped "title by artist" lookup was never sent, so it doesn't count as a
+    // success. A real search that matches nothing still returns [].
+    const sent = strippedQuery ? [songRes, strippedSongRes, videoRes] : [songRes, videoRes];
+    const failures = sent.filter((res): res is PromiseRejectedResult => res.status === 'rejected');
+    if (failures.length === sent.length) {
+        const reason = failures[0].reason;
+        throw reason instanceof Error ? reason : new Error(String(reason));
+    }
+
+    const toSongs =(res: PromiseSettledResult<any>, section: string, legacy: string): Song[] =>
         res.status === 'fulfilled' && res.value
             ? ytSearchItems(res.value, section, legacy)
                   .map((item: any) => ytToSong(item, downloaded))
